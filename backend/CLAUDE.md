@@ -61,9 +61,10 @@ and reports are read back from MySQL over REST.
 
 ## Gotchas
 Backend-wide. `app/CLAUDE.md` and the subpackage files have the rest.
-- **No tests exist.** There is no `tests/` directory anywhere in `backend/`, although
-  `requirements.txt` includes pytest and the root `CLAUDE.md` lists `pytest` / `pytest --cov`.
-  `ruff` (also listed there) is not in `requirements.txt`.
+- **Tests live outside this directory**, in repo-root `tests/` (`unit/` and `integration/`).
+  The integration suite has its own `pytest.ini`, `conftest.py`, and `requirements.txt`, and
+  runs against the live Docker stack. There is no `backend/tests/`. `ruff` (listed in the root
+  `CLAUDE.md`) is not in `requirements.txt`.
 - **Production config isn't in this repo.** `docker-compose.yml` is dev-only (hard-codes
   `APP_ENV=development`, `--reload`, exposes 3306/8000, uses nginx). Production (Traefik +
   OAuth2 proxy, per comments in `app/`) is configured elsewhere, so check it for:
