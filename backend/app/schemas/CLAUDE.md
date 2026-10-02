@@ -12,7 +12,9 @@ from the ORM classes in `models/` — response schemas use `from_attributes=True
     create defaults it to true).
   - Roster: `RosterEntryResponse`, `RosterUploadResult` (imported/updated/deactivated/errors),
     `RosterEntryPatch`, `RosterRowIn`, `RosterImportPayload`.
-  - Games: `GameCreate` (optional `course_id`), `GameUpdate` (can set `restricted`, but **not**
+  - Games: `GameFields` (title/description/max_players, unknown keys forbidden; also validates
+    an import bundle's `game` block, so a bundle can't carry `course_id`), `GameCreate`
+    (`GameFields` + optional `course_id`), `GameUpdate` (can set `restricted`, but **not**
     `course_id`), `GameResponse` (+ `course_id: int | None`, `restricted`); `max_players` 1–500,
     default 150. Moving a game between courses has its own shapes: `GameMoveRequest`
     (`course_id: int`, `confirm`) and `GameMoveResult` (`applied`, `game`, `dropped_grants`).
@@ -38,7 +40,7 @@ from the ORM classes in `models/` — response schemas use `from_attributes=True
   and `ScoreResult` (internal return type of
   `services/game_service.calculate_score`, not an API response).
 - `host.py` — Shapes for the course-host router (`/api/host`, T4):
-  - `HostGameCreate` / `HostGameUpdate` — title, description, max_players only. Hosts can't set
+  - `HostGameCreate` (= `GameFields`) / `HostGameUpdate` — title, description, max_players only. Hosts can't set
     `course_id` (it comes from the URL) or `restricted`.
   - `HostGameListItem` — `GameResponse` + `question_count`.
   - `RosterUploadMode` — `Literal["add_update", "replace"]`.

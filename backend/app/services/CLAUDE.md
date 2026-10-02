@@ -15,6 +15,10 @@ transaction, with the exceptions noted below.
   - Raising forms: `assert_can_use_game`, `assert_can_view_session_results`. They raise
     `NotFoundError`, `ForbiddenError` or `GameRestrictedError` (403 `GAME_RESTRICTED`).
   - `usable_games_stmt(user, course_id=None)` — the same rule as one `SELECT`, for lists.
+    `without_ungranted_restricted(stmt, user)` is its restricted/grant part on its own; the
+    host sessions list uses it.
+  - `grant_holders(db, game_id, course_id)` — grant holders, each with whether they HOST
+    `course_id` (admin game-access list and move).
   - Used by `common/dependencies.py`, `game_service.py` and `routers/game.py`.
 - `auth_service.py` — bcrypt password hashing; RS256 JWT creation/decoding. Token lifetimes:
   `access` 2 h (carries a `role` claim), `refresh` 7 d, `temp` 15 min. Keys come from

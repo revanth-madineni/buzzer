@@ -8,7 +8,7 @@ over sockets; players join and answer over sockets.
 
 ## Contents
 Top-level files:
-- `main.py` — Builds the FastAPI `app`: CORS, slowapi, exception handlers, and the four routers
+- `main.py` — Builds the FastAPI `app`: CORS, slowapi, exception handlers, and the five routers
   under `/api`. The lifespan connects Redis and runs `bootstrap_admin`. Exports **`asgi_app`**
   (`socketio.ASGIApp(sio, other_asgi_app=app)`), which is what must be served, not `app`.
 - `config.py` — `Settings` from env/`.env`: `APP_ENV`, `DATABASE_URL`, `REDIS_URL`, JWT keys,
@@ -27,7 +27,7 @@ Subdirectories (each has its own `CLAUDE.md`, so read it before working there):
 | `schemas/` | Pydantic request/response shapes and per-question-type structure validation. |
 | `common/` | Auth dependencies (global role only), exception types, logging, rate limiter. |
 | `services/` | Business logic: access checks, room lifecycle, scoring, Redis state, roster, exports. |
-| `routers/` | REST endpoints: `auth`, `admin` (all admin-only), `game` (host-facing), `health`. |
+| `routers/` | REST endpoints: `auth`, `admin` (all admin-only), `game` (host-facing), `host` (course-host management, T4), `health`. |
 | `websocket/` | Socket.IO gateway: join/rejoin, phase state machine, answers, timers, disconnects. |
 
 ## How it fits together
@@ -102,8 +102,10 @@ own queries. Older endpoints still use layer 3 (ownership) only. Full tables are
    - The host gets `game_over` with anonymous scores and a per-question summary. Each player
      gets their own summary.
    - Redis `session:*` keys are *not* cleaned up.
-9. **After the game (REST).** Host: `/api/game/sessions/{id}/export|guests|merge-guest`. Admin:
-   `/api/admin/sessions/{id}/export` (Canvas) and `/report`. All of these read MySQL only.
+9. **After the game (REST).** All of these read MySQL only.
+   - Session host: `/api/game/sessions/{id}/export|guests|merge-guest`.
+   - Any HOST of the session's course: `/api/host/sessions/{id}/export|report` (COMPLETED only).
+   - Admin: `/api/admin/sessions/{id}/export` (Canvas) and `/report`.
 
 Side paths:
 - **Host disconnects while `IN_PROGRESS`:** the question is auto-locked with the remaining time
