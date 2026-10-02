@@ -37,8 +37,14 @@ transaction, with the exceptions noted below.
   - Lifecycle:
     - `create_room` (see "Room creation" below) enforces max 50 concurrent LOBBY/IN_PROGRESS
       rooms and writes `GameSession` + Redis room state.
-    - `get_session_by_code`, `start_game` (LOBBY → IN_PROGRESS, returns ordered questions),
-      `complete_game`, `abandon_game`.
+    - `get_session_by_code`, `start_game` (LOBBY → IN_PROGRESS, returns ordered questions;
+      takes the game-row lock first, see "Live-game guard"), `complete_game`, `abandon_game`.
+  - **Live-game guard:**
+    - `lock_game` (`SELECT … FOR UPDATE` on the game row) and `is_game_live` (an IN_PROGRESS
+      session whose `room:{code}` still exists; a stale row without the key is not live).
+    - `assert_not_live` raises 409 `GAME_LIVE`.
+    - Every guarded write locks, checks, then writes, and `start_game` takes the same lock, so
+      an edit and a game start serialize.
   - Scoring: `calculate_score` (pure) and `record_answer` (score → insert `SessionScore` →
     update Redis score, answered set, and answer distribution).
   - Summaries: `get_leaderboard` (MySQL sum per user_id), `get_player_question_summary`,
@@ -62,9 +68,10 @@ transaction, with the exceptions noted below.
     through it, including game import.
   - `list_questions`, `create_question` (auto `order_index` = max + 1), `update_question`
     (applies non-null fields only).
-  - `delete_question`, and `reorder_questions` (409 `CONFLICT` unless the IDs are exactly the
-    game's question set).
-  - Flush only. The admin create handler still commits itself.
+  - `delete_question` (409 `QUESTION_HAS_ANSWERS` if any `SessionScore` references it), and
+    `reorder_questions` (409 `CONFLICT` unless the IDs are exactly the game's question set).
+  - Flush only. The admin create handler still commits itself. Callers take the live-game
+    guard first.
 - `report_service.py` — `build_session_report` → standalone dark-theme HTML report with
   aggregate stats only (per-question distribution bar chart / word cloud, % correct, score
   histogram). No player names.
@@ -149,6 +156,14 @@ Player answer keys: `selectedIndex`, `selectedValue`, `text`, `selectedIndices`.
   test covers this (`tests/integration/test_host_management.py`).
 - Roster matching compares `user.netid` (as received from the OAuth2 header, not lowercased)
   with lowercased roster netids. This relies on MySQL's case-insensitive default collation.
+- **Locking reads after the game-row lock.** MySQL runs at `REPEATABLE READ`, where a plain
+  `SELECT` sees the snapshot from the transaction's *first* read. Both a guarded edit and
+  `start_game` have read before they take the lock. So once a transaction holds the lock, every
+  read that decides the outcome must be a locking read (`with_for_update(read=True)` or
+  `with_for_update()`, plus `populate_existing` for ORM objects already loaded). Otherwise it
+  misses changes committed while it waited. This was checked against MySQL: after another
+  transaction commits, the plain read still returns `LOBBY` while `FOR SHARE` returns
+  `IN_PROGRESS`.
 - `start_game` and `complete_game` **commit**; `abandon_game` only flushes. Keep this in mind
   when composing them with other writes.
 - `create_room` counts rooms with `redis.keys("room:*")` plus a GET per key: O(N), blocking

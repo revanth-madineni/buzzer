@@ -121,8 +121,8 @@ Three kinds of host checks exist:
 - `DELETE /admin/users/{id}` deletes the user's scores. It refuses ADMIN targets, but
   `PUT /admin/users/{id}` can demote any admin, including the last one or yourself.
 - There is no endpoint to delete a course, a roster entry (only deactivate via PATCH), or a
-  question's scores. Deleting a question that has scores will hit the FK (see
-  `models/CLAUDE.md`).
+  question's scores. Deleting a question that has scores returns 409 `QUESTION_HAS_ANSWERS`
+  (admin and host, via `question_service`).
 - Patching a roster entry's `netid` to one that already exists in the course violates the
   unique constraint and surfaces as a 500.
 - `DELETE /game/sessions/{id}` works on LOBBY/IN_PROGRESS sessions too. It wipes Redis and the
@@ -132,8 +132,15 @@ Three kinds of host checks exist:
 - `health.py` counts players at `room:{code}:players`, but players live at
   `session:{id}:players` (see `services/state_service.py`), so `activePlayers` is always 0.
   It uses `KEYS room:*` and counts completed rooms still in Redis as active.
-- The admin endpoints for question edits (`PUT`) and reorder don't re-validate structure or
-  guard against editing a game with a live session (see `schemas/CLAUDE.md`).
+- Question `PUT` (admin and host) doesn't re-validate the whole question's structure (see
+  `schemas/CLAUDE.md`).
+- **Live games are locked.** These writes return 409 `GAME_LIVE` while the game has an
+  IN_PROGRESS session with a Redis room (see `services/CLAUDE.md`):
+  - question create/update/delete/reorder (admin and host);
+  - host game update/delete;
+  - admin move.
+  Admin game delete is deliberately exempt. Any new endpoint that writes a game or its
+  questions must call `game_service.lock_game` + `assert_not_live` first.
 - `list_sessions` (admin) and `my_active_sessions` do N+1 queries per session.
 - Validation failures in a few places raise `ConflictError` (409), e.g. reorder and merge, or
   `HTTPException(422)` with a string detail (game import). Neither uses the standard
