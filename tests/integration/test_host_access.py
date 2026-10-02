@@ -334,3 +334,111 @@ def test_access_lists(t4: T4World):
     assert_error(
         t4.request("GET", f"/admin/games/{game}/access", host.token), 403, "FORBIDDEN"
     )
+
+
+# ---------------------------------------------------------------------------
+# Host router: /host/courses/{id}/games and /host/games/{id}
+# ---------------------------------------------------------------------------
+
+
+def course_game_ids(t4: T4World, course_id: int, token: str | None = None):
+    r = t4.request("GET", f"/host/courses/{course_id}/games", token)
+    assert r.status_code == 200, r.text
+    return {g["id"] for g in r.json()}
+
+
+def test_host_lists_and_edits_own_course_games_only(t4: T4World):
+    course_a, course_b = t4.course(), t4.course()
+    game_a, game_b = t4.game(course_a), t4.game(course_b)
+    host = t4.user()
+    t4.grant_course(host, course_a)
+
+    assert course_game_ids(t4, course_a, host.token) == {game_a}
+    r = t4.request("GET", f"/host/games/{game_a}", host.token)
+    assert r.status_code == 200, r.text
+    r = t4.request(
+        "PUT", f"/host/games/{game_a}", host.token, json={"title": "Renamed"}
+    )
+    assert r.status_code == 200, r.text
+    assert t4.get_game(game_a)["title"] == "Renamed"
+
+    # Another course's game, through every game-scoped URL.
+    for method, path, body in [
+        ("GET", f"/host/games/{game_b}", None),
+        ("PUT", f"/host/games/{game_b}", {"title": "x"}),
+        ("GET", f"/host/games/{game_b}/questions", None),
+        ("POST", f"/host/games/{game_b}/questions", {}),
+        ("POST", f"/host/games/{game_b}/questions/reorder", {"order": [1]}),
+        ("PUT", f"/host/games/{game_b}/questions/1", {"prompt": "x"}),
+        ("DELETE", f"/host/games/{game_b}/questions/1", None),
+    ]:
+        r = t4.request(method, path, host.token, json=body)
+        assert_error(r, 403, "FORBIDDEN")
+    assert_error(
+        t4.request("GET", f"/host/courses/{course_b}/games", host.token),
+        403,
+        "FORBIDDEN",
+    )
+    assert t4.get_game(game_b)["title"] != "x"
+
+
+def test_host_router_rejects_guests_and_non_hosts(t4: T4World):
+    course_a = t4.course()
+    game_a = t4.game(course_a)
+    room = t4.create_room(game_a, course_a)
+    guest = t4.guest_token(room.json()["room_code"])
+    user = t4.user()
+    player = t4.user("t4_player")
+    t4.grant_course(player, course_a, "PLAYER")
+
+    for token in (guest, user.token, player.token):
+        assert_error(
+            t4.request("GET", f"/host/courses/{course_a}/games", token),
+            403,
+            "FORBIDDEN",
+        )
+        assert_error(
+            t4.request("GET", f"/host/games/{game_a}", token), 403, "FORBIDDEN"
+        )
+
+
+def test_host_router_not_found_before_forbidden(t4: T4World):
+    outsider = t4.user()
+    courseless = t4.game()
+    for path in (
+        "/host/courses/2000000000/games",
+        "/host/games/2000000000",
+        f"/host/games/{courseless}",  # non-admin: a courseless game does not exist
+    ):
+        assert_error(t4.request("GET", path, outsider.token), 404, "NOT_FOUND")
+    # Admins see courseless games.
+    assert t4.request("GET", f"/host/games/{courseless}").status_code == 200
+
+
+def test_host_router_restricted_game(t4: T4World):
+    course_a = t4.course()
+    game = t4.game(course_a, restricted=True)
+    host = t4.user()
+    t4.grant_course(host, course_a)
+
+    assert game not in course_game_ids(t4, course_a, host.token)
+    assert_error(
+        t4.request("GET", f"/host/games/{game}", host.token), 403, "GAME_RESTRICTED"
+    )
+    assert_error(
+        t4.request("GET", f"/host/games/{game}/questions", host.token),
+        403,
+        "GAME_RESTRICTED",
+    )
+
+    t4.grant_game(host, game)
+    assert game in course_game_ids(t4, course_a, host.token)
+    assert t4.request("GET", f"/host/games/{game}", host.token).status_code == 200
+
+
+def test_admin_uses_host_router_everywhere(t4: T4World):
+    course_a = t4.course()
+    game = t4.game(course_a, restricted=True)
+    assert course_game_ids(t4, course_a) == {game}
+    assert t4.request("GET", f"/host/games/{game}").status_code == 200
+    assert t4.request("GET", f"/host/games/{game}/questions").status_code == 200

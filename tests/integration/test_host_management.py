@@ -248,3 +248,118 @@ def test_admin_import_rejects_unknown_course_and_bundle_course_id(t4: T4World):
     r = import_game(t4, bundle({"title": title, "course_id": t4.course()}))
     assert r.status_code == 422, r.text
     assert title not in titles()
+
+
+# ---------------------------------------------------------------------------
+# Host: games and questions
+# ---------------------------------------------------------------------------
+
+
+def host_of(t4: T4World, course_id: int):
+    host = t4.user()
+    t4.grant_course(host, course_id)
+    return host
+
+
+def test_host_creates_game_in_path_course(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+
+    r = t4.request(
+        "POST",
+        f"/host/courses/{course}/games",
+        host.token,
+        json={"title": f"T4 Host Game {t4.tag}", "description": "d"},
+    )
+    assert r.status_code == 201, r.text
+    game = r.json()
+    t4.track_game(game["id"])
+    assert game["course_id"] == course
+    assert game["restricted"] is False
+    assert t4.get_game(game["id"])["course_id"] == course
+
+    # Hosts cannot choose the course or restrict through the body.
+    r = t4.request(
+        "POST",
+        f"/host/courses/{course}/games",
+        host.token,
+        json={"title": "x", "course_id": course},
+    )
+    assert_error(r, 422, "VALIDATION_ERROR")
+    r = t4.request(
+        "PUT", f"/host/games/{game['id']}", host.token, json={"restricted": True}
+    )
+    assert_error(r, 422, "VALIDATION_ERROR")
+    assert t4.get_game(game["id"])["restricted"] is False
+
+    # The game is usable by its creator right away.
+    assert game["id"] in t4.my_game_ids(host.token)
+    assert t4.create_room(game["id"], course, host.token).status_code == 201
+
+
+def test_host_question_crud_reorder_and_count(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    game = t4.game(course)
+    base = f"/host/games/{game}/questions"
+
+    r = t4.request(
+        "POST",
+        base,
+        host.token,
+        json={**MC_QUESTION, "prompt": "<script>alert(1)</script><i>one</i>"},
+    )
+    assert r.status_code == 201, r.text
+    q1 = r.json()
+    assert q1["prompt"] == "alert(1)<i>one</i>"
+    assert q1["answer_data"] == MC_QUESTION["answer_data"]  # hosts edit scoring
+
+    r = t4.request("POST", base, host.token, json={**MC_QUESTION, "prompt": "two"})
+    assert r.status_code == 201, r.text
+    q2 = r.json()
+
+    r = t4.request(
+        "PUT",
+        f"{base}/{q1['id']}",
+        host.token,
+        json={
+            "prompt": "<script>x</script>edited",
+            "answer_data": {"answer_points": [0, 1]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["prompt"] == "xedited"
+    assert r.json()["answer_data"] == {"answer_points": [0, 1]}
+
+    r = t4.request(
+        "POST", f"{base}/reorder", host.token, json={"order": [q2["id"], q1["id"]]}
+    )
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/host", game, host.token) == [q2["id"], q1["id"]]
+
+    r = t4.request("GET", f"/host/courses/{course}/games", host.token)
+    assert {g["id"]: g["question_count"] for g in r.json()} == {game: 2}
+
+    r = t4.request("DELETE", f"{base}/{q1['id']}", host.token)
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/host", game, host.token) == [q2["id"]]
+
+
+def test_host_question_from_another_game_is_not_found(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    game_a, game_b = t4.game(course), t4.game(course)
+    r = t4.request(
+        "POST",
+        f"/host/games/{game_a}/questions",
+        host.token,
+        json={**MC_QUESTION, "prompt": "q"},
+    )
+    qid = r.json()["id"]
+
+    for method, body in (("PUT", {"prompt": "x"}), ("DELETE", None)):
+        r = t4.request(
+            method, f"/host/games/{game_b}/questions/{qid}", host.token, json=body
+        )
+        assert_error(r, 404, "NOT_FOUND")
+    assert question_ids(t4, "/host", game_a, host.token) == [qid]
