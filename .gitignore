@@ -22,6 +22,7 @@ frontend/admin/dist/*
 logs/*.log
 logs/*.jsonl
 data/
+/backups/
 .DS_Store
 *.swp
 *.swo
