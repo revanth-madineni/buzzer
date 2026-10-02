@@ -9,11 +9,12 @@ Callers own the transaction (flush only, no commit).
 from __future__ import annotations
 
 import bleach
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..common.exceptions import ConflictError
+from ..common.exceptions import BuzzerError, ConflictError
 from ..models.game import Game, Question
+from ..models.session import SessionScore
 from ..schemas.admin import QuestionCreate, QuestionUpdate
 
 PROMPT_TAGS = ["b", "i", "br", "u"]
@@ -79,6 +80,19 @@ async def update_question(
 
 
 async def delete_question(db: AsyncSession, question: Question) -> None:
+    """409 QUESTION_HAS_ANSWERS if any SessionScore references it (the FK would
+    otherwise fail as a 500). Recorded answers are never deleted this way."""
+    answered = (
+        await db.execute(
+            select(exists().where(SessionScore.question_id == question.id))
+        )
+    ).scalar()
+    if answered:
+        raise BuzzerError(
+            "QUESTION_HAS_ANSWERS",
+            "Question has recorded answers and cannot be deleted",
+            409,
+        )
     await db.delete(question)
     await db.flush()
 

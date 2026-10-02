@@ -528,3 +528,23 @@ def test_host_deletes_game_with_only_scoreless_lobby_session(t4: T4World):
     )
     r = t4.request("GET", f"/admin/users/{host.id}")
     assert game not in r.json()["game_access"]
+
+
+async def test_question_with_answers_cannot_be_deleted(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    game = t4.game(course)
+    answered = add_question(t4, game)
+    await play_game(t4, game, course, host.token, choices=[0])
+    unanswered = add_question(t4, game)  # added after the game
+
+    for path, token in (
+        (f"/host/games/{game}/questions/{answered}", host.token),
+        (f"/admin/games/{game}/questions/{answered}", None),
+    ):
+        assert_error(t4.request("DELETE", path, token), 409, "QUESTION_HAS_ANSWERS")
+    assert question_ids(t4, "/admin", game) == [answered, unanswered]
+
+    r = t4.request("DELETE", f"/host/games/{game}/questions/{unanswered}", host.token)
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/admin", game) == [answered]
