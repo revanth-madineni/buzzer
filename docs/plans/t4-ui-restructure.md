@@ -125,7 +125,10 @@ merge, §4.5), it must catch `pydantic.ValidationError` and re-raise
 | `ROSTER_EMPTY` | 422 | `mode=replace` upload with zero valid rows (would deactivate everyone) | `"No valid roster rows found — nothing was changed"` |
 | `ROSTER_PREVIEW_REQUIRED` | 422 | Host commit with `mode=replace` and no `version` [Extra] | `"Preview the upload before replacing the roster"` |
 | `ROSTER_CHANGED` | 409 | Host commit with a `version` (any mode) that no longer matches [Extra] | `"The roster changed since your preview — preview again"` |
-| `INVALID_COURSE_ASSIGNMENT` | 422 | Move/assign with `course_id: null` | `"A game cannot be removed from its course"` |
+
+Moving or assigning a game with `course_id: null` has no custom code: `GameMoveRequest.course_id`
+is a required `int`, so Pydantic rejects it with the standard 422 `VALIDATION_ERROR`. A game
+cannot be removed from its course.
 
 Socket errors (event `error`, payload `{"message": str}`, emitted by `gateway._emit_error`):
 
@@ -150,16 +153,17 @@ state checks (409/422). Tests assert on `error` codes, not just status.
 - `GameResponse` (admin and host): existing fields + `course_id: int | null`, `restricted: bool`.
 - `HostGameListItem`: `GameResponse` + `question_count: int` = number of `Question` rows with that
   `game_id`, computed with one grouped `COUNT` query for the whole list (no per-game query).
-- `MyGameItem` (`GET /game/my-games`): existing fields + `course_id: int` (never null for
-  non-admins; admins may see null), `restricted: bool`.
+- `MyGameItem` (`GET /game/my-games`): existing fields + `course_id: int | null` (never
+  null for non-admins, who only see games of their HOST courses; admins see every game,
+  including courseless ones), `restricted: bool`.
 - `MyCourseItem` (`GET /game/my-courses`, unchanged): `id, name, semester, role`. ADMIN gets
   **every** course (`role` always `"HOST"`), ordered semester desc then name; USER gets courses
   where they hold HOST. The host app's course picker uses this list as-is.
 - `CourseResponse`: existing fields + `allow_guests: bool`.
 - `SessionListItem` (host sessions list): **same fields as the existing `AdminSessionItem`** —
   `session_id, room_code, status, game_id, game_title, course_id, course_name, course_semester,
-  host_display_name, created_at, completed_at, player_count`. Reuse that schema (rename or alias
-  it) rather than defining a second one. Sources, matching admin `list_sessions`
+  host_display_name, created_at, completed_at, player_count`. Reuse that schema rather than
+  defining a second one: `SessionListItem = AdminSessionItem` in `schemas/host.py`. Sources, matching admin `list_sessions`
   (`routers/admin.py`): `created_at` / `completed_at` are the `GameSession` columns (there is no
   `started_at`); `player_count` = `COUNT(DISTINCT SessionScore.user_id)` for the session, so a
   player who joined but never answered is not counted; `host_display_name` = host's
@@ -211,6 +215,11 @@ Session status values are the uppercase strings of the `session_status` enum (`'
            g.course_id = the single course if len(host_courses) == 1 else NULL
    ```
 
+   The last tie-break, `maxid`, compares session IDs, which are UUID strings. It is consistent
+   (the same data always gives the same course) but arbitrary: it carries no meaning such as
+   "newer". It only decides when two courses have the same number of COMPLETED sessions **and**
+   the same latest `created_at`.
+
 5. `UPDATE games SET restricted = true` — **every existing game**, with or without grants. This
    preserves today's behavior: a non-admin can use an existing game only if they hold a grant on it
    **and** HOST on its course. Cost: course hosts see no existing game they weren't granted until an
@@ -221,6 +230,21 @@ Write the backfill as `op.execute` / Core SQL inside the migration — never imp
 
 `downgrade()`: drop `fk_games_course_id_courses`, then `ix_games_course_id`, then the three
 columns. The backfill is not reversible; that is acceptable.
+
+**Partial-failure risk (MySQL).** MySQL commits each DDL statement immediately, so Alembic
+cannot roll the migration back as a unit. If `upgrade()` fails partway (e.g. during the
+backfill), some of the new columns, index and FK already exist, but `alembic_version` is still
+`003`. Re-running `alembic upgrade head` then fails with "Duplicate column name". Recovery:
+
+1. Preferred: before migrating, take a dump (`mysqldump --single-transaction --routines
+   --triggers --databases buzzer`); on failure, restore it and fix the cause before retrying.
+2. Without a dump: confirm `SELECT version_num FROM alembic_version` is `003`, inspect
+   `SHOW CREATE TABLE games` and `SHOW COLUMNS FROM courses`, and drop whatever 004 created, in
+   `downgrade()` order: `ALTER TABLE games DROP FOREIGN KEY fk_games_course_id_courses`, `DROP
+   INDEX ix_games_course_id ON games`, `ALTER TABLE games DROP COLUMN course_id, DROP COLUMN
+   restricted`, `ALTER TABLE courses DROP COLUMN allow_guests` (skip any that do not exist).
+   Then re-run `alembic upgrade head`. The backfill only writes the new columns, so dropping
+   them removes any partial backfill as well.
 
 **Migration report — [Extra]** (cut → admins find affected games/users by hand).
 New read-only script `scripts/t4_migration_report.py`, rerunnable, run inside the backend
@@ -257,6 +281,7 @@ New `backend/app/schemas/host.py`:
 - `HostGameCreate` (title, description, max_players — no `course_id`; it comes from the URL).
 - `HostGameUpdate` (title, description, max_players only — hosts cannot move or restrict games).
 - `HostGameListItem`, `RosterPreviewResponse`, `RosterDiffRow` (§4.0).
+- `SessionListItem = AdminSessionItem` (an alias imported from `schemas/admin.py`, §4.0).
 - `RosterUploadMode = Literal["add_update", "replace"]`.
 - Question shapes are reused from `schemas/admin.py` (`QuestionCreate`, `QuestionUpdate`,
   `QuestionResponse`, `QuestionReorder`). Hosts need `answer_data` to edit scoring.
@@ -494,14 +519,18 @@ course pages. Cut → hosts ask an admin.
 
 - [T4] Question endpoints delegate to `question_service` (§4.5). Game import sanitizes through
   `sanitize_prompt` and accepts an optional `course_id` form field; a `course_id` that does not
-  exist → 404 `NOT_FOUND` before anything is created.
+  exist → 404 `NOT_FOUND` before anything is created. The course comes **only** from that form
+  field. The bundle's `game` block is validated **without** `course_id` (against title,
+  description and max_players only, with unknown keys forbidden), so a bundle containing
+  `game.course_id` is still rejected with 422, as it is today. It is not accepted and silently
+  ignored.
 - [T4] `POST /admin/games` accepts optional `course_id` (404 if the course does not exist).
 - [T4] `PUT /admin/games/{id}` accepts `restricted`.
 - [T4] **Assign / move game:** `POST /admin/games/{id}/move` body `GameMoveRequest`.
 
   ```
+  # body.course_id null -> 422 VALIDATION_ERROR from Pydantic, before the handler runs (§4.0)
   game = SELECT ... FOR UPDATE or 404; course = get(Course, body.course_id) or 404
-  body.course_id is null -> 422 INVALID_COURSE_ASSIGNMENT
   is_game_live(game) -> 409 GAME_LIVE                                  [Extra guard]
   doomed = grants on game whose user lacks HOST on body.course_id
   if not body.confirm:
@@ -659,8 +688,10 @@ today's session delete).
 All steps on `feat/t4-host-admin`, backend first, then frontend:
 
 Backend
-1. Migration 004 + models + schemas (§4.1, §4.2). Run against a copy of real data; check the
-   backfill.
+1. Migration 004 + models + schemas (§4.1, §4.2). Take a `mysqldump` backup first (§4.1,
+   partial-failure risk), run the migration, and check the backfill. Accepted gap until step 4:
+   the admin create handlers accept `GameCreate.course_id` and `CourseCreate.allow_guests` but
+   ignore them. No client sends these before the frontend step, and steps 1–4 merge in one MR.
 2. `access_service` + dependencies (§4.3); `create_room`, `my-games` (§4.4).
 3. Extract `question_service` / roster `mode`; switch the admin router to them with no behavior
    change (§4.5, §4.7). The existing integration suite must pass unchanged.
@@ -823,3 +854,13 @@ reachable only by other clients or scripts. Fix it anyway.
   single branch lets the UI be tested against the new API as it is built rather than waiting for a
   backend merge. Implementation order is unchanged (backend first, then frontend).
   `fix/admin-rejoin-becomes-host` stays separate.
+- **2026-10-01, v5** — corrections found while implementing step 1:
+  - `INVALID_COURSE_ASSIGNMENT` removed. `GameMoveRequest.course_id` is a required `int`, so the
+    code could never be raised; a null now gets the standard 422 `VALIDATION_ERROR`.
+  - `MyGameItem.course_id` is `int | null`. As `int`, an admin's `my-games` call would fail
+    response validation on a courseless game.
+  - `SessionListItem` is defined as an alias of `AdminSessionItem` in `schemas/host.py`.
+  - Game import validates the bundle's `game` block without `course_id`.
+  - Step 1 notes the accepted create-handler gap before step 4.
+  - §4.1 documents MySQL's partial-failure risk and how to recover, and notes that the UUID
+    tie-break is consistent but arbitrary.
