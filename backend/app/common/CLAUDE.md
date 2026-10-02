@@ -15,6 +15,13 @@ rate limiter.
   - `require_admin` — 403 unless `user.role == "ADMIN"`.
   - `require_user` — 403 if `user.role == "GUEST"`; lets `ADMIN` and `USER` through.
   - `get_refresh_token` — reads the `refresh_token` cookie or 401s.
+  - Course-host dependencies (T4), built on `services/access_service.py`. Each runs after
+    `require_user`, **loads the resource first**, and checks the course that resource belongs
+    to, never a course ID from the URL:
+    - `require_course_host(course_id)` → `Course`;
+    - `require_game_host(game_id)` → `Game` (checks `game.course_id`);
+    - `require_question_host(game_id, question_id)` → `Question` (404 if it isn't in that game);
+    - `require_session_host(session_id)` → `GameSession` (checks `session.course_id`).
 - `exceptions.py` — `BuzzerError(code, message, status_code)` and subclasses `NotFoundError`
   (404), `ForbiddenError` (403), `UnauthorizedError` (401), `ConflictError` (409).
   `register_exception_handlers(app)` maps them to `{"error": code, "message": ...}`, validation
@@ -34,7 +41,8 @@ opt in with `@limiter.limit(...)`. WebSocket auth does **not** go through these 
 `websocket/middleware.py` has its own copy of the token check.
 
 ### What is (and isn't) checked here
-Only the **global** `User.role` (`ADMIN | USER | GUEST`, see `models/CLAUDE.md`):
+`get_current_user`, `require_user` and `require_admin` check only the **global** `User.role`
+(`ADMIN | USER | GUEST`, see `models/CLAUDE.md`):
 
 | dependency | ADMIN | USER | GUEST |
 |---|---|---|---|
@@ -42,12 +50,17 @@ Only the **global** `User.role` (`ADMIN | USER | GUEST`, see `models/CLAUDE.md`)
 | `require_user` | ✓ | ✓ | ✗ 403 |
 | `require_admin` | ✓ | ✗ 403 | ✗ 403 |
 
-**There is no course-access or game-access dependency in `common/`.** Nothing here looks at
-`UserCourseAccess` (HOST/PLAYER) or `UserGameAccess`. Those checks are done ad hoc with
-queries in `routers/game.py` and `services/game_service.py` (filtering on
-`UserCourseAccess.role == "HOST"`). `websocket/gateway.py` tracks a per-connection
-`HOST`/`PLAYER` role for a room — see `websocket/CLAUDE.md` for what it verifies. A new
-host-facing endpoint gets no course check unless it adds one itself.
+The course-host dependencies add the course/game rules. The predicates live in
+`services/access_service.py` (see `services/CLAUDE.md`); these dependencies only pick the
+resource and map failures to errors, in this order:
+401 → GUEST 403 `FORBIDDEN` → 404 `NOT_FOUND` → 403 `FORBIDDEN` (no HOST on the course) →
+403 `GAME_RESTRICTED` (restricted game, no grant). For a non-admin, a game with no course is a
+404. ADMIN passes every check once the resource exists. A new host-facing endpoint should use
+one of these dependencies rather than its own query. `websocket/gateway.py` tracks a
+per-connection `HOST`/`PLAYER` role for a room; see `websocket/CLAUDE.md` for what it verifies.
+
+Import edge: `dependencies.py` imports from `services/` (`auth_service`, and now
+`access_service`). This is the only place `common/` depends on `services/`.
 
 ## Gotchas
 - **Temp tokens authenticate like access tokens.** `get_current_user` accepts `token_type ==

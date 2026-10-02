@@ -9,6 +9,13 @@ transaction, with the exceptions noted below.
 
 ## Contents
 - `__init__.py` — Empty.
+- `access_service.py` — **The one definition of the course-host rules** (T4):
+  - Predicates: `has_course_host`, `has_game_grant`, `can_use_game`,
+    `can_view_session_results`.
+  - Raising forms: `assert_can_use_game`, `assert_can_view_session_results`. They raise
+    `NotFoundError`, `ForbiddenError` or `GameRestrictedError` (403 `GAME_RESTRICTED`).
+  - `usable_games_stmt(user, course_id=None)` — the same rule as one `SELECT`, for lists.
+  - Used by `common/dependencies.py`, `game_service.py` and `routers/game.py`.
 - `auth_service.py` — bcrypt password hashing; RS256 JWT creation/decoding. Token lifetimes:
   `access` 2 h (carries a `role` claim), `refresh` 7 d, `temp` 15 min. Keys come from
   base64-encoded `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`, else ephemeral keys generated in memory.
@@ -21,11 +28,13 @@ transaction, with the exceptions noted below.
   migrations have created the schema (blocks startup until then).
 - `game_service.py` — Core game logic:
   - `generate_room_code` — 6 chars from `23456789ABCDEFGHJKMNPQRSTUVWXYZ`, 5 attempts.
-  - **Access checks:** `assert_host_can_use_course`, `assert_host_can_use_game`,
-    `authorise_player` (see below).
-  - Lifecycle: `create_room` (checks access, enforces max 50 concurrent LOBBY/IN_PROGRESS rooms,
-    writes `GameSession` + Redis room state), `get_session_by_code`, `start_game`
-    (LOBBY → IN_PROGRESS, returns ordered questions), `complete_game`, `abandon_game`.
+  - **Access checks:** `assert_host_can_use_course`, `assert_host_can_use_game` (thin wrappers
+    over `access_service`, with no callers left in the app), `authorise_player` (see below).
+  - Lifecycle:
+    - `create_room` (see "Room creation" below) enforces max 50 concurrent LOBBY/IN_PROGRESS
+      rooms and writes `GameSession` + Redis room state.
+    - `get_session_by_code`, `start_game` (LOBBY → IN_PROGRESS, returns ordered questions),
+      `complete_game`, `abandon_game`.
   - Scoring: `calculate_score` (pure) and `record_answer` (score → insert `SessionScore` →
     update Redis score, answered set, and answer distribution).
   - Summaries: `get_leaderboard` (MySQL sum per user_id), `get_player_question_summary`,
@@ -53,17 +62,33 @@ the durable record; Redis (`state_service`) is the fast live-game view. Exceptio
 `common/exceptions.py`.
 
 ### Access rules enforced here (the real authorization logic)
-`common/` only checks the global role; the course/game checks live in `game_service.py`:
+`common/`'s `require_user`/`require_admin` only check the global role. The course/game rules
+live in `access_service.py` (hosting) and `game_service.authorise_player` (joining):
 
 | check | ADMIN | USER | GUEST |
 |---|---|---|---|
-| `assert_host_can_use_course` | any existing course | needs `UserCourseAccess` role `HOST` for that course | effectively denied (no HOST row) |
-| `assert_host_can_use_game` | any existing game | needs a `UserGameAccess` row | effectively denied |
+| `has_course_host` | always | `UserCourseAccess` role `HOST` on that course | effectively denied (no HOST row) |
+| `can_use_game` (author/run) | always | game has a course, HOST on **`game.course_id`**, and, if `game.restricted`, a `UserGameAccess` grant | denied by `require_user` first |
+| `can_view_session_results` | always | HOST on **`session.course_id`** and, if the game is restricted, a grant | denied by `require_user` first |
 | `authorise_player` (join as player) | **any room** | active `CourseRoster` row matching `user.netid` **or** `UserCourseAccess` `PLAYER` **or** `HOST` for the session's course | **any room — no course check** |
 
-- Hosting requires both checks independently: HOST in the course **and** a grant for the game.
-  Since games have no course (see `models/CLAUDE.md`), any game you can use can be run in any
-  course you host.
+- Course HOST is the main rule. A grant only matters on a restricted game, and a grant
+  without HOST on the game's course does nothing.
+- Results follow the course a session was **played in**, not the game's current course.
+
+### Room creation (`create_room`, spec §4.4)
+One transaction, committed by the request's `get_db`:
+1. The course must exist (404) **before** anything else, so a bad course never attaches a game.
+2. The game row is loaded `SELECT … FOR UPDATE` (404 if missing). The lock serializes
+   concurrent room creations for one game.
+3. ADMIN: a courseless game is attached to this course (log `game_attached_on_first_room`).
+   Non-admin: `assert_can_use_game` (courseless → 404, no HOST → 403 `FORBIDDEN`, restricted
+   without a grant → 403 `GAME_RESTRICTED`).
+4. A course different from `game.course_id` → 422 `COURSE_MISMATCH`, for admins too.
+5. Then the existing room-limit check, room code, `GameSession` insert and Redis state. A later
+   failure rolls back the attach along with everything else.
+
+So every session created since T4 has `session.course_id == game.course_id`.
 - `authorise_player` returns the display name used in-game: roster `full_name` (given name) for
   roster matches, else `display_name`/`username`.
 - `report_service` and `export_service` do **no** access checks — the calling router must.

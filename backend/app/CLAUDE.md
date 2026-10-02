@@ -37,13 +37,19 @@ Dependency direction: `routers/` and `websocket/` → `services/` → `models/` 
 
 ### Authorization is split across three layers
 1. **`common/`**: global `User.role` only (`require_admin`, `require_user` = not GUEST).
-2. **`services/game_service.py`**: course/game grants. Hosting needs course `HOST` **and** a
-   game grant. Joining as a player needs a roster row or course `PLAYER`/`HOST`; guests and admins
-   join any room.
+2. **`services/access_service.py`** (hosting) and **`game_service.authorise_player`**
+   (joining):
+   - Hosting a game needs `HOST` on **the game's course**, plus a grant if the game is
+     `restricted`.
+   - Joining as a player needs a roster row or course `PLAYER`/`HOST` on the session's course.
+     Guests and admins join any room.
+   - `common/dependencies.py` wraps the hosting rule as `require_course_host`,
+     `require_game_host`, `require_question_host` and `require_session_host`.
 3. **`routers/game.py` / `websocket/gateway.py`**: session **ownership**
    (`host_user_id == user.id` or ADMIN) for managing a session or joining it as host.
-There is no single "can this user act on this course" helper. Each new endpoint has to pick the
-right layer itself. Full tables are in `common/`, `services/`, and `routers/` `CLAUDE.md`.
+New host-facing endpoints should use the `require_*_host` dependencies rather than writing their
+own queries. Older endpoints still use layer 3 (ownership) only. Full tables are in `common/`,
+`services/`, and `routers/` `CLAUDE.md`.
 
 ### Where state lives
 | store | holds | lifetime |
@@ -55,8 +61,9 @@ right layer itself. Full tables are in `common/`, `services/`, and `routers/` `C
 
 ### Data flow for one game
 1. **Create room (REST, host).** `POST /api/game/rooms` → `routers/game.py` →
-   `game_service.create_room`, which checks course HOST and game access, enforces `MAX_ROOMS`, and
-   generates a code. It inserts `GameSession(status=LOBBY)` in MySQL and `room:{code}` in Redis.
+   `game_service.create_room`. It checks access, requires the room's course to be the game's
+   course (an admin's first room attaches a courseless game), enforces `MAX_ROOMS`, and generates
+   a code. It inserts `GameSession(status=LOBBY)` in MySQL and `room:{code}` in Redis.
 2. **Player auth (REST).** `GET /api/game/rooms/{code}/ping`, then a token from
    `/api/auth/guest`, `/api/auth/login`, or OAuth2 (`oauth2-callback` → temp token →
    `exchange-temp`).

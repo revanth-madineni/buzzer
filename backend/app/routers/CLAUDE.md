@@ -25,8 +25,8 @@ into `services/`. Live gameplay is **not** here — it runs over Socket.IO in `w
 `db.commit()` themselves rely on that.
 
 ### Endpoint access map
-Global roles from `common/` (`ADMIN | USER | GUEST`); course/game grants checked in
-`services/game_service.py` (see `services/CLAUDE.md`).
+Global roles from `common/` (`ADMIN | USER | GUEST`); course/game rules come from
+`services/access_service.py` (see `services/CLAUDE.md`).
 
 **Admin-only** — everything under `/api/admin/` (`require_admin`). Hosts (USER with course
 `HOST` access) cannot call any of these. That includes editing games/questions, viewing
@@ -37,9 +37,9 @@ rosters, Canvas export, and the HTML session report.
 | endpoint | additional check |
 |---|---|
 | `GET /game/my-courses` | ADMIN: all courses. USER: courses where they hold `HOST`. |
-| `GET /game/my-games` | ADMIN: all games. USER: games with a `UserGameAccess` row. |
+| `GET /game/my-games` | ADMIN: all games (including courseless ones). USER: games whose `course_id` is a course they HOST, minus restricted games they have no grant on (`access.usable_games_stmt`). |
 | `GET /game/my-active-sessions` | Only sessions where `host_user_id == user.id`. |
-| `POST /game/rooms` | `create_room` → HOST on the course **and** access to the game (ADMIN bypasses both). |
+| `POST /game/rooms` | `create_room`: the course must equal the game's course (422 `COURSE_MISMATCH`, admins included); non-admins need `can_use_game`; an admin's first room attaches a courseless game. |
 | `DELETE /game/sessions/{id}` | ADMIN or the session's `host_user_id`. Any status. |
 | `GET /game/sessions/{id}/guests` | ADMIN or session host. |
 | `POST /game/sessions/{id}/merge-guest` | ADMIN or session host. |
@@ -51,8 +51,8 @@ rosters, Canvas export, and the HTML session report.
 **Public (no auth):** `GET /health`, `GET /game/rooms/{code}/ping`, and all of `/auth/*`
 (except that `/auth/exchange-temp` and `/auth/refresh` need a valid temp/refresh token).
 
-Two distinct kinds of host checks exist. **Creating** a room checks *course HOST role + game
-grant*. **Managing** a session afterwards (delete/export/guests/merge) checks only
+Two distinct kinds of host checks exist. **Creating** a room checks *HOST on the game's course
+(+ a grant if the game is restricted)*. **Managing** a session afterwards (delete/export/guests/merge) checks only
 *`host_user_id` ownership*, not course role. So a co-host with HOST on the same course can't
 manage someone else's session, and a host who has lost HOST access can still manage their old
 sessions.
