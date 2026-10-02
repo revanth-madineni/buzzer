@@ -122,7 +122,6 @@ merge, §4.5), it must catch `pydantic.ValidationError` and re-raise
 | `INVALID_ORDER` | 422 | Reorder IDs are not exactly the game's question-ID set [Extra] | `"Order must list every question in this game exactly once"` |
 | `SESSION_NOT_COMPLETED` | 409 | Host export/report for a session whose status is not COMPLETED | `"Results are available once the session is completed"` |
 | `ROSTER_TOO_LARGE` | 422 | Roster upload with more than 1000 data rows [Extra] | `"Roster uploads are limited to 1000 rows"` |
-| `ROSTER_EMPTY` | 422 | `mode=replace` upload with zero valid rows (would deactivate everyone) | `"No valid roster rows found — nothing was changed"` |
 | `ROSTER_PREVIEW_REQUIRED` | 422 | Host commit with `mode=replace` and no `version` [Extra] | `"Preview the upload before replacing the roster"` |
 | `ROSTER_CHANGED` | 409 | Host commit with a `version` (any mode) that no longer matches [Extra] | `"The roster changed since your preview — preview again"` |
 
@@ -468,8 +467,11 @@ change for inputs that are valid today.
   `replace`.
 - [Extra] More than 1000 data rows → 422 `ROSTER_TOO_LARGE`, nothing written (today: truncates,
   then deactivates everyone past row 1000).
-- [T4] `mode=replace` with zero valid rows (every row errored, or only the "Points Possible" row)
-  → 422 `ROSTER_EMPTY`, nothing written. Today such an upload would deactivate the whole roster.
+- [T4] An upload with zero valid rows (every row errored, or only the "Points Possible" row)
+  changes nothing, in either mode: 200 `RosterUploadResult` with all counts 0 and `errors`
+  filled in. This is **today's behavior**: the deactivation step runs only `if seen_netids:`
+  (non-empty). The refactor must keep that guard, or a `replace` upload of only bad rows would
+  deactivate the whole roster. A T5 test locks it in (§4.14). There is no separate error code.
 - [Extra] `preview_roster_csv(db, course_id, file, mode) -> RosterPreviewResponse`: same parser,
   computes the diff without writing.
 - [Extra] `roster_version(db, course_id) -> str` — **the one function** both preview and commit
@@ -571,7 +573,7 @@ Prefix `/host`, registered in `backend/app/main.py` under `/api`. Every endpoint
 | `DELETE /host/games/{game_id}/questions/{question_id}` | `require_question_host` | 204. |
 | `POST /host/games/{game_id}/questions/reorder` | `require_game_host` | `QuestionReorder` → 204. |
 | `GET /host/courses/{course_id}/roster` | `require_course_host` | `list[RosterEntryResponse]` (active and inactive). |
-| `POST /host/courses/{course_id}/roster` | `require_course_host` | Multipart: `file` (Canvas gradebook CSV, parsed by `process_roster_csv`), `mode` (default `add_update`), `version` [Extra]. → `RosterUploadResult`. `mode=replace` with no valid rows → 422 `ROSTER_EMPTY`. [Extra] `version` is **required** for `mode=replace` (missing → 422 `ROSTER_PREVIEW_REQUIRED`) and **optional** for `add_update`; whenever it is sent, in either mode, it must match `roster_version` (else 409 `ROSTER_CHANGED`). |
+| `POST /host/courses/{course_id}/roster` | `require_course_host` | Multipart: `file` (Canvas gradebook CSV, parsed by `process_roster_csv`), `mode` (default `add_update`), `version` [Extra]. → `RosterUploadResult`. No valid rows → 200 with `errors` and nothing changed (§4.5). [Extra] `version` is **required** for `mode=replace` (missing → 422 `ROSTER_PREVIEW_REQUIRED`) and **optional** for `add_update`; whenever it is sent, in either mode, it must match `roster_version` (else 409 `ROSTER_CHANGED`). |
 | `POST /host/courses/{course_id}/roster/preview` | `require_course_host` | [Extra] Same `file` + `mode`, no writes → `RosterPreviewResponse`. |
 | `PATCH /host/courses/{course_id}/roster/{entry_id}` | `require_course_host` | [Extra] `{is_active: bool}` only → `RosterEntryResponse`; 404 if the entry is not in this course. |
 | `GET /host/courses/{course_id}/sessions?status=` | `require_course_host` | `list[SessionListItem]` for sessions with this `session.course_id` (any host's), ordered `created_at` desc, **excluding sessions of restricted games the caller has no grant on** (admin sees all). `status`: optional `Literal["LOBBY","IN_PROGRESS","COMPLETED","ABANDONED"]`; omitted = all statuses; other values → 422 `VALIDATION_ERROR`. All filtering (status, restricted) is done **server-side** in the query. |
@@ -736,7 +738,8 @@ on `error` codes from §4.0 and re-read state after each write.
 - **Live-edit race [Extra, if built]:** not reliably testable end-to-end; cover with the
   `GAME_LIVE` test above and rely on the row lock (§4.5).
 - **Roster:** `add_update` never deactivates; `replace` deactivates missing entries; `replace`
-  with no valid rows → 422 `ROSTER_EMPTY` and nothing deactivated; a CSV without `Student` /
+  with no valid rows (admin and host) → 200, non-empty `errors`, and nothing deactivated (re-read
+  the roster); a CSV without `Student` /
   `SIS Login ID` → `errors` and no changes; non-HOST → 403. [Extra:] preview matches what commit
   does; `replace` without `version` → 422 `ROSTER_PREVIEW_REQUIRED`; stale `version` → 409
   `ROSTER_CHANGED`; >1000 rows → 422 `ROSTER_TOO_LARGE` with no changes.
@@ -864,3 +867,8 @@ reachable only by other clients or scripts. Fix it anyway.
   - Step 1 notes the accepted create-handler gap before step 4.
   - §4.1 documents MySQL's partial-failure risk and how to recover, and notes that the UUID
     tie-break is consistent but arbitrary.
+- **2026-10-01, v6** — `ROSTER_EMPTY` removed (found at the start of step 3). Its rationale was
+  wrong: `process_roster_csv` / `process_roster_rows` already skip deactivation when no row is
+  valid (`if seen_netids:`), so such an upload changes nothing and returns 200 with `errors`.
+  Keeping today's behavior avoids changing the admin API in a no-behavior-change step. §4.5
+  now requires the refactor to keep that guard, and the §4.14 roster test asserts it.
