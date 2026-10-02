@@ -8,23 +8,29 @@ course it belongs to — never a course ID taken from the URL alongside it.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 import structlog
-from fastapi import APIRouter, Depends, File, Form, UploadFile
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import Response
+from redis.asyncio import Redis
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..common.dependencies import (
     require_course_host,
     require_game_host,
     require_question_host,
+    require_session_host,
     require_user,
 )
+from ..common.exceptions import BuzzerError
 from ..database import get_db
 from ..models.course import Course, CourseRoster
 from ..models.game import Game, Question
+from ..models.session import GameSession, SessionScore
 from ..models.user import User
+from ..redis_client import get_redis
 from ..schemas.admin import (
     GameResponse,
     QuestionCreate,
@@ -39,9 +45,13 @@ from ..schemas.host import (
     HostGameListItem,
     HostGameUpdate,
     RosterUploadMode,
+    SessionListItem,
 )
 from ..services import access_service as access
 from ..services import question_service
+from ..services import state_service as state
+from ..services.export_service import build_session_csv
+from ..services.report_service import build_session_report
 from ..services.roster_service import process_roster_csv
 
 router = APIRouter(prefix="/host", tags=["host"])
@@ -127,6 +137,54 @@ async def update_game(
     return game
 
 
+@router.delete("/games/{game_id}", status_code=204)
+async def delete_game(
+    game: Annotated[Game, Depends(require_game_host)],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> None:
+    """
+    Hosts never delete recorded results: any COMPLETED session, or any session
+    with at least one answer, blocks the delete (admins can still delete).
+    Score-less sessions (LOBBY, ABANDONED, stale IN_PROGRESS) are removed,
+    Redis first. Questions and UserGameAccess grants cascade with the game.
+    """
+    sessions = (
+        (await db.execute(select(GameSession).where(GameSession.game_id == game.id)))
+        .scalars()
+        .all()
+    )
+    session_ids = [s.id for s in sessions]
+    has_scores = (
+        session_ids
+        and (
+            await db.execute(
+                select(exists().where(SessionScore.session_id.in_(session_ids)))
+            )
+        ).scalar()
+    )
+    if any(s.status == "COMPLETED" for s in sessions) or has_scores:
+        raise BuzzerError(
+            "GAME_HAS_RESULTS",
+            "Games with recorded results can only be deleted by an admin",
+            409,
+        )
+
+    for s in sessions:
+        await state.delete_room_state(redis, s.room_code, s.id)
+    if session_ids:
+        await db.execute(delete(GameSession).where(GameSession.id.in_(session_ids)))
+    await db.delete(game)
+    await db.flush()
+    logger.info(
+        "host_game_deleted",
+        game_id=game.id,
+        user_id=user.id,
+        sessions_deleted=len(session_ids),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Questions (shared logic in question_service; hosts see answer_data to edit
 # scoring)
@@ -210,3 +268,103 @@ async def upload_roster(
     result = await process_roster_csv(db, course.id, await file.read(), mode)
     logger.info("host_roster_uploaded", course_id=course.id, user_id=user.id, mode=mode)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Sessions and results. Sessions belong to the course they were played in
+# (session.course_id), whichever host ran them.
+# ---------------------------------------------------------------------------
+
+SessionStatus = Literal["LOBBY", "IN_PROGRESS", "COMPLETED", "ABANDONED"]
+
+
+@router.get("/courses/{course_id}/sessions", response_model=list[SessionListItem])
+async def list_sessions(
+    course: Annotated[Course, Depends(require_course_host)],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    status: Annotated[SessionStatus | None, Query()] = None,
+) -> list[dict]:
+    """Newest first; sessions of restricted games the caller has no grant on are omitted."""
+    stmt = (
+        select(GameSession, Game.title, Course.name, Course.semester, User)
+        .join(Game, Game.id == GameSession.game_id)
+        .join(Course, Course.id == GameSession.course_id)
+        .outerjoin(User, User.id == GameSession.host_user_id)
+        .where(GameSession.course_id == course.id)
+        .order_by(GameSession.created_at.desc())
+    )
+    if status is not None:
+        stmt = stmt.where(GameSession.status == status)
+    rows = (await db.execute(access.without_ungranted_restricted(stmt, user))).all()
+
+    counts = dict(
+        (
+            await db.execute(
+                select(
+                    SessionScore.session_id,
+                    func.count(SessionScore.user_id.distinct()),
+                )
+                .where(SessionScore.session_id.in_([r[0].id for r in rows]))
+                .group_by(SessionScore.session_id)
+            )
+        ).all()
+    )
+    return [
+        {
+            "session_id": s.id,
+            "room_code": s.room_code,
+            "status": s.status,
+            "game_id": s.game_id,
+            "game_title": title,
+            "course_id": s.course_id,
+            "course_name": course_name,
+            "course_semester": semester,
+            "host_display_name": (host.display_name or host.username or host.netid)
+            if host
+            else None,
+            "created_at": s.created_at,
+            "completed_at": s.completed_at,
+            "player_count": counts.get(s.id, 0),
+        }
+        for s, title, course_name, semester, host in rows
+    ]
+
+
+def _require_completed(session: GameSession) -> None:
+    if session.status != "COMPLETED":
+        raise BuzzerError(
+            "SESSION_NOT_COMPLETED",
+            "Results are available once the session is completed",
+            409,
+        )
+
+
+@router.get("/sessions/{session_id}/export")
+async def export_session(
+    session: Annotated[GameSession, Depends(require_session_host)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+    """Per-player score CSV (Player, Q1..Qn, Total)."""
+    _require_completed(session)
+    filename, content = await build_session_csv(db, session.id)
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/sessions/{session_id}/report")
+async def session_report(
+    session: Annotated[GameSession, Depends(require_session_host)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+    """Standalone HTML summary (aggregate stats, no player names)."""
+    _require_completed(session)
+    filename, content = await build_session_report(db, session.id)
+    return Response(
+        content=content,
+        media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

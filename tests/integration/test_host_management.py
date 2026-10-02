@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from . import t4_helpers
-from .t4_helpers import T4World, assert_error
+from .t4_helpers import T4World, add_question, assert_error, play_game
 
 t4 = t4_helpers.t4  # fixture
 
@@ -474,3 +474,57 @@ def test_host_roster_access_and_mode_validation(t4: T4World):
         "VALIDATION_ERROR",
     )
     assert roster_state(t4, course_a) == {}
+
+
+# ---------------------------------------------------------------------------
+# Host: game delete (never deletes recorded results)
+# ---------------------------------------------------------------------------
+
+
+async def test_host_cannot_delete_game_with_results(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    completed_game, in_progress_game = t4.game(course), t4.game(course)
+    for g in (completed_game, in_progress_game):
+        add_question(t4, g)
+    done = await play_game(t4, completed_game, course, host.token, choices=[0])
+    partial = await play_game(
+        t4, in_progress_game, course, host.token, choices=[0], finish=False
+    )
+
+    for game, played, status in (
+        (completed_game, done, "COMPLETED"),
+        (in_progress_game, partial, "IN_PROGRESS"),
+    ):
+        r = t4.request("DELETE", f"/host/games/{game}", host.token)
+        assert_error(r, 409, "GAME_HAS_RESULTS")
+        assert t4.get_game(game)["id"] == game
+        session = t4.admin_session(played.session_id)
+        assert session is not None and session["status"] == status
+        assert session["player_count"] == 1
+        assert len(t4.request("GET", f"/admin/games/{game}/questions").json()) == 1
+
+
+def test_host_deletes_game_with_only_scoreless_lobby_session(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    game = t4.game(course, restricted=True)
+    t4.grant_game(host, game)
+    add_question(t4, game)
+    room = t4.create_room(game, course, host.token).json()
+    assert t4.request("GET", f"/game/rooms/{room['room_code']}/ping").status_code == 200
+
+    other = host_of(t4, t4.course())
+    assert_error(
+        t4.request("DELETE", f"/host/games/{game}", other.token), 403, "FORBIDDEN"
+    )
+
+    r = t4.request("DELETE", f"/host/games/{game}", host.token)
+    assert r.status_code == 204, r.text
+    assert_error(t4.request("GET", f"/admin/games/{game}"), 404, "NOT_FOUND")
+    assert t4.admin_session(room["session_id"]) is None
+    assert_error(
+        t4.request("GET", f"/game/rooms/{room['room_code']}/ping"), 404, "NOT_FOUND"
+    )
+    r = t4.request("GET", f"/admin/users/{host.id}")
+    assert game not in r.json()["game_access"]

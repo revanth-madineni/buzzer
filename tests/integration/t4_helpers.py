@@ -228,3 +228,90 @@ async def join_as(
     assert done, f"[{label}] neither sync_state nor error within 10s"
     task = done.pop()
     return client, ("sync_state" if task is ok else "error"), task.result()
+
+
+# ---------------------------------------------------------------------------
+# Running a one-question game (for results, exports and delete-blocking tests)
+# ---------------------------------------------------------------------------
+
+MC_QUESTION = {
+    "type": "multiple_choice",
+    "grading_type": "ACCURACY",
+    "prompt": "T4 question",
+    "config": {"options": ["A", "B"]},
+    "answer_data": {"answer_points": [1, 0]},  # option 0 scores 1, option 1 scores 0
+    "points_value": 1,
+}
+
+
+def add_question(t4: T4World, game_id: int) -> int:
+    r = t4.request("POST", f"/admin/games/{game_id}/questions", json=MC_QUESTION)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+@dataclass
+class PlayedGame:
+    room_code: str
+    session_id: str
+    player_names: list[str]
+
+
+async def play_game(
+    t4: T4World,
+    game_id: int,
+    course_id: int,
+    host_token: str,
+    choices: list[int],
+    finish: bool = True,
+) -> PlayedGame:
+    """
+    Create a room as `host_token`, join one guest per entry of `choices`, start,
+    and have guest i pick option choices[i] on the game's first question. With
+    finish=True the game runs to game_over (COMPLETED); otherwise every socket
+    disconnects after the answers, leaving the session IN_PROGRESS with scores.
+    """
+    r = t4.create_room(game_id, course_id, host_token)
+    assert r.status_code == 201, r.text
+    room_code, session_id = r.json()["room_code"], r.json()["session_id"]
+    tokens = [t4.guest_token(room_code) for _ in choices]
+
+    host = TestSocketClient(t4.base_url, host_token, "host")
+    players = [
+        TestSocketClient(t4.base_url, tok, f"p{i}") for i, tok in enumerate(tokens)
+    ]
+    names: list[str] = []
+    try:
+        for c in (host, *players):
+            await c.connect()
+        await host.emit("join_room", {"room_code": room_code, "role": "HOST"})
+        await host.wait_for("sync_state")
+        for p in players:
+            await p.emit("join_room", {"room_code": room_code, "role": "PLAYER"})
+            await p.wait_for("sync_state")
+            names.append((await host.wait_for("player_joined"))["displayName"])
+
+        await host.emit("host_advance", {})
+        await host.wait_for("new_question")
+        question_id = None
+        for p, choice in zip(players, choices):
+            question_id = (await p.wait_for("new_question"))["questionId"]
+            await p.emit(
+                "submit_answer",
+                {
+                    "question_id": question_id,
+                    "answer_data": {"selectedIndex": choice},
+                    "answer_time_ms": 500,
+                },
+            )
+            await p.wait_for("answer_received")
+
+        if finish:
+            await host.emit("host_advance", {})  # QUESTION -> RESULTS
+            await host.wait_for("question_results")
+            await host.emit("host_advance", {})  # RESULTS -> game over
+            await host.wait_for("game_over")
+    finally:
+        for c in (host, *players):
+            await c.disconnect()
+    return PlayedGame(room_code, session_id, names)

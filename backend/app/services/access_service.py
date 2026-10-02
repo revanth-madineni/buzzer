@@ -120,24 +120,28 @@ def usable_games_stmt(user: User, course_id: int | None = None) -> Select:
         stmt = stmt.where(Game.course_id == course_id)
     if user.role == "ADMIN":
         return stmt
-    return (
-        stmt.join(
-            UserCourseAccess,
-            and_(
-                UserCourseAccess.course_id == Game.course_id,
-                UserCourseAccess.user_id == user.id,
-                UserCourseAccess.role == "HOST",
-            ),
-        )
-        .outerjoin(
-            UserGameAccess,
-            and_(
-                UserGameAccess.game_id == Game.id,
-                UserGameAccess.user_id == user.id,
-            ),
-        )
-        .where(or_(Game.restricted.is_(False), UserGameAccess.user_id.is_not(None)))
+    stmt = stmt.join(
+        UserCourseAccess,
+        and_(
+            UserCourseAccess.course_id == Game.course_id,
+            UserCourseAccess.user_id == user.id,
+            UserCourseAccess.role == "HOST",
+        ),
     )
+    return without_ungranted_restricted(stmt, user)
+
+
+def without_ungranted_restricted(stmt: Select, user: User) -> Select:
+    """
+    Drop rows whose Game is restricted and not granted to `user` (no-op for
+    admins). `stmt` must already have `Game` in its FROM clause.
+    """
+    if user.role == "ADMIN":
+        return stmt
+    return stmt.outerjoin(
+        UserGameAccess,
+        and_(UserGameAccess.game_id == Game.id, UserGameAccess.user_id == user.id),
+    ).where(or_(Game.restricted.is_(False), UserGameAccess.user_id.is_not(None)))
 
 
 # ---------------------------------------------------------------------------
