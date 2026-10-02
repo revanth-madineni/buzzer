@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..database import Base
 
 if TYPE_CHECKING:
+    from .game import Game
     from .session import GameSession
     from .user import User
 
@@ -29,8 +30,12 @@ class Course(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     semester: Mapped[str] = mapped_column(String(50), nullable=False)
+    allow_guests: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    games: Mapped[list[Game]] = relationship("Game", back_populates="course")
     roster: Mapped[list[CourseRoster]] = relationship(
         "CourseRoster", back_populates="course", cascade="all, delete-orphan"
     )
