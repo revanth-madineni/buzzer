@@ -3,17 +3,19 @@
 ## Purpose
 SQLAlchemy 2.0 ORM models (typed `Mapped[...]` style) for every persistent table. All models
 subclass `Base` from `app/database.py`. Schema changes go through Alembic in
-`app/migrations/versions/` (currently 001–003), which is kept in step with these files.
+`app/migrations/versions/` (currently 001–004), which is kept in step with these files.
 
 ## Contents
 - `__init__.py` — Re-exports all models. Import order matters: FK targets are imported before
   the tables that reference them (User → Course → Game → Session).
 - `user.py` — `User`: UUID string PK, optional `netid` / `email` / `username` (all unique,
   nullable), `password_hash`, and a **global** `role` enum `ADMIN | USER | GUEST` (default `USER`).
-- `course.py` — `Course` (name + semester), `CourseRoster` (imported student list keyed by
+- `course.py` — `Course` (name + semester, `allow_guests` bool default true, `games`
+  relationship with no cascade), `CourseRoster` (imported student list keyed by
   `netid`, unique per course, `is_active` flag), and `UserCourseAccess` (composite PK
   `user_id, course_id` with a **per-course** `role` enum `HOST | PLAYER`).
-- `game.py` — `Game` (title, description, `max_players` default 150), `Question` (ordered by
+- `game.py` — `Game` (title, description, `max_players` default 150, nullable `course_id` FK
+  → `courses.id` with a `course` relationship, `restricted` bool default false), `Question` (ordered by
   `order_index`; `type` is a free-form string, `grading_type` is `ACCURACY | COMPLETENESS`,
   type-specific data lives in JSON `config` and `answer_data`), and `UserGameAccess` (composite
   PK `user_id, game_id`, no role column).
@@ -30,14 +32,25 @@ Pydantic request/response shapes; they are separate from these ORM classes. The 
 not here.
 
 ### How games relate to courses
-**There is no direct Game ↔ Course link.** `games` has no `course_id` and there is no
-game–course join table. The only place the two meet is `GameSession`, which carries both
-`game_id` and `course_id`: a course is chosen when a game is *run*, not when it is authored. So:
-- A game is a reusable question bank that can be played in any course.
-- Who may see/use a game is governed by `UserGameAccess` (per-user grants), independent of
-  course membership.
-- Who may act in a course is governed by `UserCourseAccess.role` (`HOST` / `PLAYER`).
-- "Which games belong to course X" can only be answered via past sessions, or not at all.
+Since migration 004 (T4, spec `docs/plans/t4-ui-restructure.md`), **a game belongs to at most
+one course** through `Game.course_id`. `GameSession` still carries its own `course_id` as well:
+- `Game.course_id` is the course the game is authored for. "Which games belong to course X" is
+  `Game.course_id == X`. It is nullable: games the backfill could not place, and games created
+  through the admin API without a course, stay unassigned until an admin assigns them or their
+  first room attaches them.
+- `GameSession.course_id` is the course the session was **played in**. It is never rewritten. A
+  session created before 004, or before its game was moved, can have a different `course_id`
+  from its game. Results and exports belong to the session's course.
+- `Game.restricted` narrows access. When true, a host also needs a `UserGameAccess` grant on
+  the game, on top of course `HOST`. Migration 004 set it true on every game that existed
+  then. New games default to false.
+- `Course.allow_guests` is a per-course switch for GUEST players (default true).
+- Who may act in a course is still governed by `UserCourseAccess.role` (`HOST` / `PLAYER`).
+
+The access rules that use these columns are not implemented here. They are specified in the
+T4 spec, §4.3–§4.6. Until those land, `services/game_service.py` still authorizes hosts with
+per-user `UserGameAccess` grants alone, and ignores `course_id`, `restricted` and
+`allow_guests`.
 
 ### Two separate role systems
 - `User.role` (global): `ADMIN | USER | GUEST`.
@@ -52,6 +65,12 @@ game–course join table. The only place the two meet is `GameSession`, which ca
   cascade. Deleting a game/course/user/question that has sessions or scores will raise an
   integrity error (or try to null a non-nullable FK) unless the caller cleans up first.
   Deleting a `GameSession` *does* cascade to its scores.
+  `Game.course_id` also has no `ondelete` and `Course.games` no cascade, so a course with games
+  cannot be deleted either (there is no course-delete endpoint).
+- **Don't assume a game has a course.** `Game.course_id` is nullable, and don't treat
+  `Game.course_id` and `GameSession.course_id` as interchangeable (see above).
+- Migration 004's DDL is not transactional on MySQL. If it fails partway, see the recovery
+  steps in the T4 spec §4.1.
 - `SessionScore` has only a non-unique index on `(session_id, user_id)`; nothing at the DB
   level prevents two scores for the same user + question. Dedup must happen in code.
 - `GameSession.host_user_id` is nullable — don't assume every session has a host user.
