@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -11,7 +12,6 @@ from pydantic import (
     model_validator,
 )
 
-
 # ---------------------------------------------------------------------------
 # Courses
 # ---------------------------------------------------------------------------
@@ -21,12 +21,14 @@ class CourseCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(..., min_length=1, max_length=255)
     semester: str = Field(..., min_length=1, max_length=50)
+    allow_guests: bool = True
 
 
 class CourseUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(None, min_length=1, max_length=255)
     semester: str | None = Field(None, min_length=1, max_length=50)
+    allow_guests: bool | None = None
 
 
 class CourseResponse(BaseModel):
@@ -34,6 +36,7 @@ class CourseResponse(BaseModel):
     id: int
     name: str
     semester: str
+    allow_guests: bool
     created_at: datetime
 
 
@@ -90,6 +93,7 @@ class GameCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: str = Field("", max_length=5000)
     max_players: int = Field(150, ge=1, le=500)
+    course_id: int | None = None
 
 
 class GameUpdate(BaseModel):
@@ -97,6 +101,8 @@ class GameUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=5000)
     max_players: int | None = Field(None, ge=1, le=500)
+    # Not course_id: moving a game goes through POST /admin/games/{id}/move.
+    restricted: bool | None = None
 
 
 class GameResponse(BaseModel):
@@ -105,7 +111,15 @@ class GameResponse(BaseModel):
     title: str
     description: str
     max_players: int
+    course_id: int | None
+    restricted: bool
     created_at: datetime
+
+
+class GameMoveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    course_id: int
+    confirm: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +298,28 @@ class GameAccessGrant(BaseModel):
 class UserWithAccessResponse(UserResponse):
     course_access: list[dict]
     game_access: list[int]
+
+
+class CourseAccessEntry(BaseModel):
+    user_id: str
+    username: str | None
+    netid: str | None
+    display_name: str | None
+    role: Literal["HOST", "PLAYER"]
+
+
+class GameAccessEntry(BaseModel):
+    user_id: str
+    username: str | None
+    netid: str | None
+    display_name: str | None
+    has_course_host: bool
+
+
+class GameMoveResult(BaseModel):
+    applied: bool
+    game: GameResponse
+    dropped_grants: list[GameAccessEntry]
 
 
 # ---------------------------------------------------------------------------
