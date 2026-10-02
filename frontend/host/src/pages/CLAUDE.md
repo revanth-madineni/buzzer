@@ -20,10 +20,35 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
   - **Active Sessions** card: each of *my* LOBBY/IN_PROGRESS sessions, with "Rejoin" (→
     `/game/{code}/lobby`; `sync_state` then redirects to the right phase) and "Delete"
     (two-step confirm → `DELETE /game/sessions/{id}`).
-  - **Create Game Room**: two independent dropdowns, course and quiz (auto-selected when
-    there's exactly one), then `POST /game/rooms {course_id, game_id}` →
-    `/game/{room_code}/lobby`.
+  - **Create Game Room**: course first, then quiz. The quiz dropdown lists only `my-games`
+    items whose `course_id` equals the selected course (both auto-select when there's exactly
+    one). Then `POST /game/rooms {course_id, game_id}` → `/game/{room_code}/lobby`.
+    "Manage this course" (disabled until a course is picked) → `/courses/{id}/games`. If
+    `my-courses` is empty: "You don't host any courses yet — ask an admin for HOST access" and
+    no dropdowns.
   - "Sign Out" removes the token and goes to `/login`.
+- `manage/*` — the per-course management area (T4), rendered inside `App.tsx`'s `HostLayout`
+  at `/courses/:courseId/…`. `:courseId` is only for navigation. Game, question and session
+  calls use the flat `/host/games/…` and `/host/sessions/…` URLs, so the server checks the
+  resource's own course.
+  - `manage/GamesPage.tsx` — `.../games`: the course's games (`GET /host/courses/{id}/games`)
+    with question count and a read-only **Restricted** badge. Create (`POST`, lands in this
+    course, unrestricted), edit title/description/max players (`PUT /host/games/{id}`), and
+    delete (`DELETE`). Delete shows the server's message, e.g. `GAME_HAS_RESULTS` or
+    `GAME_LIVE`.
+  - `manage/QuestionEditorPage.tsx` — `.../games/:gameId/questions`: an **adapted copy of the
+    admin app's `QuestionEditorPage`**, pointed at `/host/games/{id}/questions…`, with
+    "Back" → this course's games and no JSON export (hosts have no export endpoint). The form
+    logic (`FormState`, `formToPayload`, the `points_value` derivation) must be kept in step
+    with the admin copy by hand.
+  - `manage/RosterPage.tsx` — `.../roster`: active/inactive tables
+    (`GET /host/courses/{id}/roster`). Upload of the **Canvas gradebook CSV** only (no
+    column-mapping wizard; that's admin-only), with mode "Add / update only" (default,
+    `add_update`) or "Replace roster" (`replace`, behind a browser confirm). It shows the
+    added/updated/deactivated counts and the parser's `errors`.
+  - `manage/SessionsPage.tsx` — `.../sessions`: COMPLETED sessions of the course, any host
+    (`?status=COMPLETED`), with "Download scores (CSV)" and "Download summary (HTML)"
+    (`api.download` of `/host/sessions/{id}/export|report`).
 - `game/GameLayout.tsx` — `/game/:code/*`: parent route. Fetches the title via
   `GET /game/rooms/{code}` (failure ignored), opens the socket with `auth: {token}`, emits
   `join_room {room_code, role: "HOST"}` on **every** `connect`, maps server events to state and
@@ -55,21 +80,24 @@ Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **glob
 `User.role` (`ADMIN | USER | GUEST`) and the **per-course** `UserCourseAccess.role`
 (`HOST | PLAYER`). "Host" is not a global role.
 - **What the dropdowns show.** `my-courses`: ADMIN gets every course, USER only courses
-  where they hold `HOST`. `my-games`: ADMIN gets every game, USER only games with a
-  `UserGameAccess` grant. GUEST gets 403 on both.
-- **Games are not tied to courses.** There is no `course_id` on `Game`; a course and a game
-  only meet on `GameSession`, when a room is created. So the two dropdowns are independent, and
-  any game you can use can be run in any course you host.
-- **Creating a room** (`POST /game/rooms`): HOST on the course **and** a grant for the game,
-  both checked independently. ADMIN bypasses both. There's also a server cap of 50 concurrent
-  rooms.
+  where they hold `HOST`. `my-games`: ADMIN gets every game; a USER gets the games of their
+  HOST courses, minus restricted games they have no grant on. GUEST gets 403 on both.
+- **Games belong to a course** (`Game.course_id`), so the quiz dropdown is filtered by the
+  chosen course. A room in another course is rejected with 422 `COURSE_MISMATCH`.
+- **Creating a room** (`POST /game/rooms`): HOST on the game's course, plus a grant if the game
+  is restricted. ADMIN bypasses the access part (an admin's first room attaches a game that
+  has no course). There's also a server cap of 50 concurrent rooms.
 - **Managing a session afterwards** checks only ownership, not course role:
   `my-active-sessions` lists only sessions where `host_user_id == me`, `DELETE` needs owner or
   ADMIN, and socket `join_room` as HOST needs `user.id == session.host_user_id` or global
   `ADMIN`. A co-host with HOST on the same course can't rejoin or delete someone else's
   session. A host who has since lost course HOST access can still run their existing sessions.
-- The host app never calls `/api/admin/*`. Course/roster/game/question editing, access grants,
-  and Canvas/HTML reports are admin-only and live in the admin app.
+- **The management area** uses `/api/host/*` (course HOST on the resource's course). Results
+  belong to the course a session was **played in**, so any co-host can download them, but a
+  host who lost HOST cannot. Editing a game or its questions is blocked with 409 `GAME_LIVE`
+  while it is being played.
+- The host app never calls `/api/admin/*`. Access grants, `restricted`, moving games between
+  courses, the roster column-mapping import and Canvas export stay in the admin app.
 
 ### Event → navigation (GameLayout)
 | server event | effect |
@@ -115,9 +143,9 @@ Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **glob
   `{window.location.origin}/player/join`. Under `npm run dev:host` (Vite on :5173, base `/`)
   that's the host app itself, which redirects to `/login`. It only works behind nginx, where
   all apps share an origin.
-- **Error messages are mostly lost.** A 403 from `POST /game/rooms` (no HOST access or no game
-  grant) shows as `HTTP 403`, because `api.ts` reads `detail` but `BuzzerError` sends `message`.
-  The OAuth2 exchange path in `LoginPage` has the same `detail`-only parsing.
+- **Error messages.** Since T4, `api.ts` shows the server's `message` (e.g. "You do not have
+  HOST access to this course", "This game is being played right now"). The OAuth2 exchange
+  path in `LoginPage` bypasses `api.ts` and still reads only `detail`.
 - **The per-question UI is split across files.** `typeLabel` and `optionLabel` are duplicated
   in `QuestionPage`, `ResultsPage`, and `GameOverPage`. The word cloud's Levenshtein grading is
   a client-side re-implementation used only for colouring, so it can disagree with the server's

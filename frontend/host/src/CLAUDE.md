@@ -5,15 +5,21 @@ The host app: a React + Vite + Tailwind single-page app that an instructor runs 
 projector. They sign in, pick a course + game to create a room (or rejoin/delete one of their
 active sessions), show the QR code and room code, and drive the game (start, lock/unlock,
 show results, next question) through to an anonymous score histogram and per-question
-breakdown. The host is the only client that advances the game.
+breakdown. The host is the only client that advances the game. Course HOSTs also get a
+management area (T4) for each course: games and questions, the roster, and completed-session
+downloads.
 
 ## Contents
 Top-level files:
 - `main.tsx` — Mounts `<App />` in `StrictMode` and imports `index.css`.
 - `App.tsx` — `react-router` routes under basename `import.meta.env.BASE_URL` (`/host/` in
-  production, `/` in dev): `/login`, `/home`, and `/game/:code/{lobby,question,results,gameover}`
-  nested under `GameLayout`. `/home` and `/game/*` sit behind `RequireAuth`, which only checks
-  that `localStorage.token` is **present**. Anything else redirects to `/login`.
+  production, `/` in dev): `/login`, `/home`, `/game/:code/{lobby,question,results,gameover}`
+  nested under `GameLayout`, and `/courses/:courseId/{games,games/:gameId/questions,roster,
+  sessions}` nested under `HostLayout` (defined in `App.tsx`). `HostLayout` has a course picker
+  from `my-courses`; switching course keeps the section. It also has Games / Roster / Sessions
+  links, "Play" (→ `/home`) and Sign out. Everything except `/login` sits behind `RequireAuth`,
+  which only checks that `localStorage.token` is **present**. Anything else redirects to
+  `/login`.
 - `index.css` — Tailwind directives and global dark-slate body styles.
 - `types/game.ts` — TypeScript shapes for socket payloads (`SyncStatePayload`,
   `QuestionPayload` incl. `gradingType`/`editDistance`/`startedAt`, `HostResultsPayload`,
@@ -23,9 +29,9 @@ Top-level files:
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
-| `lib/` | `api.ts` REST wrapper (`get`/`post`/`delete`, Bearer token from `localStorage.token`) and `cn()`. No role logic. |
+| `lib/` | `api.ts` REST wrapper (`get`/`post`/`put`/`patch`/`delete`, `postForm`, `download`; Bearer token from `localStorage.token`; shows the server's error `message`) and `cn()`. No role logic. |
 | `components/` | `ui/` primitives (`Button`, `Card`, `Input`) and the display-only `TimerBar` (supports a mid-question `initialSeconds`). |
-| `pages/` | `LoginPage`, `HomePage` (course/game pickers, active sessions), and `game/*`. `game/GameLayout.tsx` owns the socket and shares state via `useGame()`. |
+| `pages/` | `LoginPage`, `HomePage` (course → that course's games, "Manage this course", active sessions), `game/*`, and `manage/*` (Games, QuestionEditor, Roster, Sessions). `game/GameLayout.tsx` owns the socket and shares state via `useGame()`. |
 
 ## How it fits together
 Dependency direction: `pages/` → `components/` + `lib/` + `types/`. There's no global store.
@@ -42,17 +48,19 @@ subdirectories.
   `UserCourseAccess.role` (`HOST | PLAYER`). "Host" is not a global role; both are granted in
   the admin app's `UserDetailPage`.
 - **What `HomePage` lists.** `my-courses` gives ADMIN every course, USER only HOST courses.
-  `my-games` gives ADMIN every game, USER only games with a `UserGameAccess` grant. GUEST gets
-  403 on both.
-- **Games have no course.** The course and game dropdowns are independent, and they only meet
-  on the `GameSession` a room creates. Any game you can use can be run in any course you host.
-- **Creating a room** (`POST /game/rooms`) needs course HOST **and** the game grant; ADMIN
-  bypasses both.
+  `my-games` gives ADMIN every game; a USER gets the games of their HOST courses, minus
+  restricted games they have no grant on. GUEST gets 403 on both.
+- **Games belong to a course.** The game dropdown shows only the selected course's games
+  (`course_id`). The server rejects a room for another course with 422 `COURSE_MISMATCH`.
+- **Creating a room** (`POST /game/rooms`) needs HOST on the game's course (+ a grant if the
+  game is restricted); ADMIN bypasses that.
+- **The management area** calls `/api/host/*`. Every call is checked server-side against the
+  course the resource belongs to (`backend/app/routers/CLAUDE.md`).
 - **Managing a session afterwards** checks only ownership (`host_user_id`) or ADMIN. This covers
   `my-active-sessions`, delete, and socket `join_room` as HOST. Course role isn't rechecked.
-- **Admin-only endpoints are never called.** Nothing under `/api/admin/*` is used. The
-  host-accessible guest-merge and CSV-export endpoints exist but aren't wired into this app
-  either.
+- **Admin-only endpoints are never called.** Nothing under `/api/admin/*` is used. Results
+  are downloaded via `/api/host/sessions/{id}/export|report`. The older
+  `/api/game/sessions/{id}/export|guests|merge-guest` are still not wired in.
 
 ### Data flow for one game
 1. **Sign in.** `LoginPage`: NetID SSO (`/api/auth/oauth2-callback` → back to `/host/login` →
@@ -86,9 +94,6 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
 - **Token collision with the player/admin apps.** All three use `localStorage.token` on one
   origin. A guest join in the player app on the same browser replaces the host's login, and
   logging out anywhere logs out everywhere (`lib/CLAUDE.md`).
-- **Backend error text is lost.** `api.ts` reads `detail`, but `BuzzerError` (including
-  `require_user`'s 403 and `create_room`'s "no HOST access" 403) sends `message`. The host
-  sees `HTTP 403`.
 - **No token refresh.** The 2 h access token is never renewed, and `RequireAuth` still admits an
   expired token.
 - **Reconnect gaps.** In the RESULTS phase the chart is empty (results aren't in `sync_state`).
@@ -99,7 +104,8 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
   `answer_phase_ended` never fires) and resets to off on reload.
 - **The QR/join URL only works behind nginx.** Under `npm run dev:host` it points at the host
   app itself.
-- **Duplicated code across apps.** `lib/api.ts` and `components/ui/*` are copies, not shared.
+- **Duplicated code across apps.** `lib/api.ts`, `components/ui/*` and
+  `pages/manage/QuestionEditorPage.tsx` (from the admin app) are copies, not shared.
   `ui/*` is byte-identical to the admin app's and tuned differently from the player's. Question
   type labels and answer-reveal rendering are duplicated across three pages here, and the word
   cloud re-implements Levenshtein client-side, so it can disagree with server grading.

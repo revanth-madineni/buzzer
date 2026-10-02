@@ -8,12 +8,28 @@ self-contained `useState` + `load()` component with no shared store.
 
 ## Contents
 Routes are defined in `../App.tsx` (basename `/admin/` in production). Everything except
-`/login` sits inside `RequireAdmin` (token-present check only) and `AdminLayout` (sidebar:
-Courses, Users, Games, Guests, Sessions, Logout). Unknown paths → `/courses`.
-- `LoginPage.tsx` — `/login`: username + password → `POST /auth/login` → `/courses`. No NetID
+`/login` sits inside `RequireAdmin` (token-present check only) and `AdminLayout`, whose
+sidebar has two sections: **Admin** (Users, Courses, Access) and **Host tools** (Games,
+Sessions, Guests), plus Logout. Unknown paths → `/users`.
+- `LoginPage.tsx` — `/login`: username + password → `POST /auth/login` → `/users`. No NetID
   SSO and no role check.
-- `CoursesPage.tsx` — `/courses`: list, create, and rename courses (name + semester). Each row
-  links to its roster. No delete (there's no endpoint).
+- `CoursesPage.tsx` — `/courses`: list, create, and rename courses (name + semester). It also
+  sets `allow_guests`: a checkbox on create, and a per-course "Guests allowed" toggle
+  (`PUT {allow_guests}`). Each row links to its roster. No delete (there's no endpoint).
+- `AccessPage.tsx` — `/access` (T4): pick a course (`GET /admin/courses`), then three panels:
+  - **Course hosts and players** (`GET /admin/courses/{id}/access`). Grant: a user from
+    `GET /admin/users` + role → `POST /admin/users/{uid}/course-access`. That call upserts, so
+    the per-row role select also switches HOST ↔ PLAYER. Revoke →
+    `DELETE .../course-access/{courseId}`.
+  - **Games in this course** (`GET /admin/games` filtered by `course_id` client-side), each
+    with:
+    - a **Restricted** toggle (`PUT /admin/games/{id} {restricted}`);
+    - its grant holders (`GET /admin/games/{id}/access`), with grant and revoke via
+      `.../game-access`.
+    Warnings: a holder with `has_course_host = false` ("this grant has no effect"), and a
+    restricted game with no holders ("only admins can run this game").
+  - **Unassigned games** (`course_id = null`): "Assign to this course" opens `MoveGamePanel`
+    with the course fixed.
 - `RosterPage.tsx` — `/courses/:courseId/roster`: active/inactive roster lists with inline edit
   (netid, name, email, `is_active`), plus a CSV import wizard: pick file → client-side
   RFC-4180 parse → auto-detect columns (Canvas gradebook: `SIS Login ID` / `Student`, skip the
@@ -24,7 +40,8 @@ Courses, Users, Games, Guests, Sessions, Logout). Unknown paths → `/courses`.
   link to `/users/:userId`.
 - `UserDetailPage.tsx` — `/users/:userId`: profile edit (username only for local accounts,
   display name, email, new password, global role `USER | ADMIN`), delete (hidden for ADMINs),
-  and the two **access panels**:
+  and the two **access panels** (game entries are labelled with their course, or
+  "Unassigned"):
   - **Course access**: list with revoke, plus "grant" as a checkbox list of *ungranted* courses,
     each with a HOST/PLAYER toggle (default HOST) → one `POST .../course-access` per course.
   - **Game access**: list with revoke, plus a checkbox list of ungranted games →
@@ -32,7 +49,14 @@ Courses, Users, Games, Guests, Sessions, Logout). Unknown paths → `/courses`.
 - `GuestsPage.tsx` — `/guests`: GUEST users (name, email, UUID), delete, and "Merge Guest into
   Real User" by guest UUID ("Use ID" fills it) + target netid.
 - `GamesPage.tsx` — `/games`: list, create, and edit games (title, description, `max_players`);
-  JSON import (`postForm`, then jump to the new game's questions); delete (browser confirm).
+  JSON import (`postForm` with a `course_id` form field, then jump to the new game's
+  questions); delete (browser confirm).
+  - **Create and import require a course** (the API keeps it optional).
+  - The list shows each game's course, a **Restricted** badge, and **Unassigned** for games with
+    no course.
+  - "Move / assign to course" opens `MoveGamePanel`: it calls `POST /admin/games/{id}/move`
+    with `confirm=false`, shows "These users will lose access: …", then calls with
+    `confirm=true`.
 - `QuestionEditorPage.tsx` — `/games/:gameId/questions`: ordered question list with up/down
   reorder (`POST .../reorder` with the full id order), inline add/edit via `QuestionForm`,
   delete, and JSON export. `formToPayload` builds `config` / `answer_data` per type and
@@ -56,14 +80,14 @@ Two separate role systems (see `backend/app/models/CLAUDE.md`):
   auto-created as `USER` on first SSO login. GUESTs are created by the player app's guest join
   and only appear on `GuestsPage`.
 - **Per-course `UserCourseAccess.role`** (`HOST | PLAYER`) and **per-game `UserGameAccess`**:
-  granted in `UserDetailPage`. These are what the **host app** reads. `my-courses` lists
-  HOST courses, `my-games` lists granted games, and `POST /game/rooms` requires **both** HOST
-  on the chosen course **and** a grant on the chosen game. ADMINs bypass all of it, so grants
-  on an ADMIN user are shown but have no effect.
-- **Games are not tied to courses.** `GamesPage` has no course field and there's no
-  game ↔ course link anywhere. To let someone run game G in course C, grant them HOST on C
-  **and** access to G, separately, on their user page. There's no "who can host this
-  game/course" view from the game or course side.
+  granted in `AccessPage` or `UserDetailPage`. The **host app** and `/api/host/*` read them:
+  - `my-courses` lists HOST courses;
+  - `my-games` lists the games of those courses, minus restricted ones without a grant;
+  - running or editing a game needs HOST on **the game's course** (+ a grant if restricted).
+  ADMINs bypass all of it, so grants on an ADMIN user are shown but have no effect.
+- **Games belong to a course** (`Game.course_id`, T4). A game grant only matters for a
+  `restricted` game, and only for a user who is also HOST on that game's course. `AccessPage`
+  flags grants that do nothing.
 - **Roster ≠ course access.** `CourseRoster` rows (keyed by netid, not a user FK) are what
   let a student **join as a player**. `authorise_player` accepts an active roster row **or** a
   `UserCourseAccess` PLAYER/HOST row. Roster entries grant nothing on the host side.
@@ -72,7 +96,7 @@ Two separate role systems (see `backend/app/models/CLAUDE.md`):
 
 ## Gotchas
 - **No client-side admin gate.** Any local `USER` can log in here and gets the full sidebar;
-  every page then shows a bare `HTTP 403` (see `lib/CLAUDE.md`).
+  every page then shows "Admin access required" (see `lib/CLAUDE.md`).
 - **Roster import deactivates everyone not in the upload.** The backend deactivates every entry
   missing from `rows`, and the wizard **silently drops** any row with a blank netid, name, **or
   email** before sending (`mapRow(..., skipBlank = true)`). So a student with no email in the
@@ -82,9 +106,9 @@ Two separate role systems (see `backend/app/models/CLAUDE.md`):
   The surname is discarded, matching `roster_service.process_roster_csv`. That name is what
   players see in-game. Title-casing uses `\b\w`, which mangles non-ASCII names (`élodie` →
   `éLodie`).
-- **Changing a course role needs a revoke first.** The grant panel only lists *ungranted*
-  courses, so switching HOST ↔ PLAYER means revoke, then re-grant, even though the backend's
-  `POST .../course-access` already upserts the role.
+- **Changing a course role on `UserDetailPage` needs a revoke first.** Its grant panel only
+  lists *ungranted* courses, even though `POST .../course-access` upserts. `AccessPage`'s role
+  select switches it in one step.
 - **Bulk grants are not atomic.** One request per checked course/game via `Promise.all`. A
   partial failure shows one error, but the successful grants stay.
 - **Admins can demote themselves or the last admin.** The role picker has no guard (neither
@@ -98,10 +122,10 @@ Two separate role systems (see `backend/app/models/CLAUDE.md`):
 - **Guest merge is by raw UUID + netid** with no preview. Backend-wise (see
   `routers/CLAUDE.md`), if no user has that netid the guest is **promoted in place** to a
   `USER`. The success message says "merged" either way.
-- **Question edits aren't guarded against live games.** Edit, delete, and reorder hit the
-  backend with no live-session check, and the backend doesn't validate structure on `PUT` /
-  reorder (see `schemas/CLAUDE.md`). Deleting a question that already has scores fails with an
-  FK error surfaced as `HTTP 500`.
+- **Question writes during a live game** (create, edit, delete, reorder, and game move) get
+  409 `GAME_LIVE`. Deleting an answered question gets 409 `QUESTION_HAS_ANSWERS`. The page
+  shows the server's message. The backend still doesn't validate whole-question structure on
+  `PUT` (see `schemas/CLAUDE.md`).
 - **`points_value` can disagree with the saved options.** Multi-select and fill-in-the-blank
   drop blank-text options/answers from the payload, but `points_value` is computed over **all**
   of them, blanks included. MC doesn't drop blank options at all.
