@@ -67,7 +67,8 @@ that the two must match (T4 spec §4.4) is enforced in `services/`, not here.
 
 ## Gotchas
 - **`QuestionUpdate` has no structural validation.** Only per-field patterns/ranges are
-  checked, and `routers/admin.py` assigns fields straight onto the model. A PUT can change
+  checked, and `services/question_service.update_question` assigns non-null fields straight
+  onto the model. A PUT can change
   `type`, `grading_type`, `config`, or `answer_data` independently and leave a question that
   `QuestionCreate` would reject. Bulk game import does run each question through
   `QuestionCreate`.
@@ -89,4 +90,5 @@ that the two must match (T4 spec §4.4) is enforced in `services/`, not here.
   `room_code` case.
 - `UserWithAccessResponse.course_access` is an untyped `list[dict]`; its shape is whatever
   `routers/admin.py` builds.
-- HTML sanitization of question prompts (`bleach`) happens in `routers/admin.py`, not here.
+- HTML sanitization of question prompts (`bleach`) happens in
+  `services/question_service.sanitize_prompt`, not here.

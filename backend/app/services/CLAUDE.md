@@ -46,8 +46,21 @@ transaction, with the exceptions noted below.
 - `roster_service.py` — `process_roster_csv` (Canvas gradebook export: needs `Student` and
   `SIS Login ID` columns, skips the "Points Possible" row, netid = part before `@`, lowercased;
   stores only the **given name** as `full_name`) and `process_roster_rows` (pre-mapped rows from
-  the admin column-mapping wizard). Both upsert by `(course_id, netid)`, cap at 1000 rows, and
-  **deactivate every roster entry not in the upload**.
+  the admin column-mapping wizard). Both upsert by `(course_id, netid)` (reactivating listed
+  inactive entries) and cap at 1000 rows. Both take `mode`:
+  - `"replace"` (the default; all admin callers) also **deactivates every roster entry not in
+    the upload**;
+  - `"add_update"` (host default, T4) never deactivates.
+  Deactivation lives in `_deactivate_missing`, which skips it when no row was valid.
+- `question_service.py` — Question authoring shared by the admin router (and the host router,
+  T4):
+  - `sanitize_prompt` (`bleach`, tags `b i br u`, no attributes). **Every** prompt write goes
+    through it, including game import.
+  - `list_questions`, `create_question` (auto `order_index` = max + 1), `update_question`
+    (applies non-null fields only).
+  - `delete_question`, and `reorder_questions` (409 `CONFLICT` unless the IDs are exactly the
+    game's question set).
+  - Flush only. The admin create handler still commits itself.
 - `report_service.py` — `build_session_report` → standalone dark-theme HTML report with
   aggregate stats only (per-question distribution bar chart / word cloud, % correct, score
   histogram). No player names.
@@ -123,9 +136,13 @@ Player answer keys: `selectedIndex`, `selectedValue`, `text`, `selectedIndices`.
   range check, and a string `selectedValue` such as `"false"` is truthy and scores as `true`.
 - MC/TF "correct" uses exact float equality with `points_value`; partial-credit options are
   never marked correct.
-- **Roster uploads are full replacements.** Anyone absent is deactivated. When the 1000-row cap
-  is hit, the loop `break`s but deactivation still runs, so students past row 1000 get
+- **`replace` uploads are full replacements.** Anyone absent is deactivated. When the 1000-row
+  cap is hit, the loop `break`s but deactivation still runs, so students past row 1000 get
   deactivated.
+- **Don't drop the `seen_netids` guard** in `_deactivate_missing`. An upload with zero valid rows
+  (all rows errored, or only "Points Possible") returns 200 with `errors` and changes nothing
+  *only* because of it. Without it, a `replace` upload would deactivate the whole roster. A T5
+  test covers this (`tests/integration/test_host_management.py`).
 - Roster matching compares `user.netid` (as received from the OAuth2 header, not lowercased)
   with lowercased roster netids. This relies on MySQL's case-insensitive default collation.
 - `start_game` and `complete_game` **commit**; `abandon_game` only flushes. Keep this in mind
@@ -142,7 +159,7 @@ Player answer keys: `selectedIndex`, `selectedValue`, `text`, `selectedIndices`.
   after a session show as unanswered columns.
 - `report_service` and `export_service` raise `ValueError` (not `NotFoundError`) for an unknown
   session; `report_service` embeds `q.prompt` as raw HTML, relying on the `bleach` sanitization
-  done on write in `routers/admin.py`.
+  done on write in `question_service.sanitize_prompt`.
 - Canvas export: `roster_only=True` skips players **without a netid**. It does not check that
   the player is on the roster. The `Student` column uses the roster's given-name-only
   `full_name`.
