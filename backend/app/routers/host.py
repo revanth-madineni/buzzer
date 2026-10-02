@@ -48,7 +48,7 @@ from ..schemas.host import (
     SessionListItem,
 )
 from ..services import access_service as access
-from ..services import question_service
+from ..services import game_service, question_service
 from ..services import state_service as state
 from ..services.export_service import build_session_csv
 from ..services.report_service import build_session_report
@@ -125,12 +125,20 @@ async def get_game(game: Annotated[Game, Depends(require_game_host)]) -> Game:
     return game
 
 
+async def _guard_write(db: AsyncSession, redis: Redis, game_id: int) -> None:
+    """Game-row lock, then 409 GAME_LIVE if the game is being played (§4.5)."""
+    await game_service.lock_game(db, game_id)
+    await game_service.assert_not_live(db, redis, game_id)
+
+
 @router.put("/games/{game_id}", response_model=GameResponse)
 async def update_game(
     body: HostGameUpdate,
     game: Annotated[Game, Depends(require_game_host)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> Game:
+    await _guard_write(db, redis, game.id)
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(game, field, value)
     await db.flush()
@@ -146,12 +154,22 @@ async def delete_game(
 ) -> None:
     """
     Hosts never delete recorded results: any COMPLETED session, or any session
-    with at least one answer, blocks the delete (admins can still delete).
-    Score-less sessions (LOBBY, ABANDONED, stale IN_PROGRESS) are removed,
-    Redis first. Questions and UserGameAccess grants cascade with the game.
+    with at least one answer, blocks the delete (admins can still delete). Then
+    a live game is 409 GAME_LIVE. Score-less sessions (LOBBY, ABANDONED, stale
+    IN_PROGRESS) are removed, Redis first. Questions and UserGameAccess grants
+    cascade with the game.
     """
+    await game_service.lock_game(db, game.id)
+    # Locking reads after the lock (REPEATABLE READ, §4.5).
     sessions = (
-        (await db.execute(select(GameSession).where(GameSession.game_id == game.id)))
+        (
+            await db.execute(
+                select(GameSession)
+                .where(GameSession.game_id == game.id)
+                .with_for_update(read=True)
+                .execution_options(populate_existing=True)
+            )
+        )
         .scalars()
         .all()
     )
@@ -160,7 +178,9 @@ async def delete_game(
         session_ids
         and (
             await db.execute(
-                select(exists().where(SessionScore.session_id.in_(session_ids)))
+                select(
+                    exists().where(SessionScore.session_id.in_(session_ids))
+                ).with_for_update(read=True)
             )
         ).scalar()
     )
@@ -170,6 +190,7 @@ async def delete_game(
             "Games with recorded results can only be deleted by an admin",
             409,
         )
+    await game_service.assert_not_live(db, redis, game.id)
 
     for s in sessions:
         await state.delete_room_state(redis, s.room_code, s.id)
@@ -187,7 +208,7 @@ async def delete_game(
 
 # ---------------------------------------------------------------------------
 # Questions (shared logic in question_service; hosts see answer_data to edit
-# scoring)
+# scoring). Every write is guarded against live games.
 # ---------------------------------------------------------------------------
 
 
@@ -206,7 +227,9 @@ async def create_question(
     body: QuestionCreate,
     game: Annotated[Game, Depends(require_game_host)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> Question:
+    await _guard_write(db, redis, game.id)
     return await question_service.create_question(db, game, body)
 
 
@@ -215,7 +238,9 @@ async def reorder_questions(
     body: QuestionReorder,
     game: Annotated[Game, Depends(require_game_host)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
+    await _guard_write(db, redis, game.id)
     await question_service.reorder_questions(db, game, body.order)
 
 
@@ -224,7 +249,9 @@ async def update_question(
     body: QuestionUpdate,
     question: Annotated[Question, Depends(require_question_host)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> Question:
+    await _guard_write(db, redis, question.game_id)
     return await question_service.update_question(db, question, body)
 
 
@@ -232,7 +259,9 @@ async def update_question(
 async def delete_question(
     question: Annotated[Question, Depends(require_question_host)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
+    await _guard_write(db, redis, question.game_id)
     await question_service.delete_question(db, question)
 
 

@@ -3,7 +3,10 @@ Question authoring shared by the admin and host routers (spec §4.5).
 
 Every prompt write goes through sanitize_prompt: report_service embeds prompts
 as raw HTML, so an unsanitized write would let any course HOST store script.
-Callers own the transaction (flush only, no commit).
+Callers own the transaction (flush only, no commit). Writers call
+game_service.lock_game + assert_not_live first; the reads here that decide the
+outcome are therefore locking reads, so they see edits committed while the
+caller waited for the lock (REPEATABLE READ, spec §4.5).
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ async def create_question(
             .where(Question.game_id == game.id)
             .order_by(Question.order_index.desc())
             .limit(1)
+            .with_for_update(read=True)
         )
         max_idx = result.scalar_one_or_none()
         order_index = (max_idx + 1) if max_idx is not None else 0
@@ -98,7 +102,12 @@ async def delete_question(db: AsyncSession, question: Question) -> None:
 
 
 async def reorder_questions(db: AsyncSession, game: Game, order: list[int]) -> None:
-    result = await db.execute(select(Question).where(Question.game_id == game.id))
+    result = await db.execute(
+        select(Question)
+        .where(Question.game_id == game.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     questions = {q.id: q for q in result.scalars().all()}
 
     if set(order) != set(questions.keys()):

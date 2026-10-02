@@ -548,3 +548,64 @@ async def test_question_with_answers_cannot_be_deleted(t4: T4World):
     r = t4.request("DELETE", f"/host/games/{game}/questions/{unanswered}", host.token)
     assert r.status_code == 204, r.text
     assert question_ids(t4, "/admin", game) == [answered]
+
+
+# ---------------------------------------------------------------------------
+# Live games cannot be edited or deleted (GAME_LIVE, spec §4.5)
+# ---------------------------------------------------------------------------
+
+
+async def test_live_game_blocks_every_guarded_write(t4: T4World):
+    course, other_course = t4.course(), t4.course()
+    host = host_of(t4, course)
+    game = t4.game(course)
+    q1, q2 = add_question(t4, game), add_question(t4, game)
+    # Started, no players, sockets gone: IN_PROGRESS with a live Redis room.
+    live = await play_game(t4, game, course, host.token, choices=[], finish=False)
+    assert t4.admin_session(live.session_id)["status"] == "IN_PROGRESS"
+
+    def snapshot():
+        qs = t4.request("GET", f"/admin/games/{game}/questions").json()
+        return t4.get_game(game), [(q["id"], q["prompt"]) for q in qs]
+
+    before = snapshot()
+    new_q = {**MC_QUESTION, "prompt": "new"}
+    writes = [
+        ("PUT", f"/host/games/{game}", host.token, {"title": "x"}),
+        ("POST", f"/host/games/{game}/questions", host.token, new_q),
+        ("PUT", f"/host/games/{game}/questions/{q1}", host.token, {"prompt": "x"}),
+        ("DELETE", f"/host/games/{game}/questions/{q2}", host.token, None),
+        (
+            "POST",
+            f"/host/games/{game}/questions/reorder",
+            host.token,
+            {"order": [q2, q1]},
+        ),
+        ("DELETE", f"/host/games/{game}", host.token, None),
+        ("POST", f"/admin/games/{game}/questions", None, new_q),
+        ("PUT", f"/admin/games/{game}/questions/{q1}", None, {"prompt": "x"}),
+        ("DELETE", f"/admin/games/{game}/questions/{q2}", None, None),
+        ("POST", f"/admin/games/{game}/questions/reorder", None, {"order": [q2, q1]}),
+        (
+            "POST",
+            f"/admin/games/{game}/move",
+            None,
+            {"course_id": other_course, "confirm": True},
+        ),
+    ]
+    for method, path, token, body in writes:
+        r = t4.request(method, path, token, json=body)
+        assert_error(r, 409, "GAME_LIVE")
+    assert snapshot() == before
+
+    # Once the session is gone, the same edits go through.
+    t4.delete_session(live.session_id)
+    r = t4.request(
+        "POST",
+        f"/host/games/{game}/questions/reorder",
+        host.token,
+        json={"order": [q2, q1]},
+    )
+    assert r.status_code == 204, r.text
+    r = t4.request("DELETE", f"/host/games/{game}", host.token)
+    assert r.status_code == 204, r.text

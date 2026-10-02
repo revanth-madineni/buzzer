@@ -71,6 +71,53 @@ async def assert_host_can_use_game(db: AsyncSession, user: User, game_id: int) -
 
 
 # ---------------------------------------------------------------------------
+# Live-game guard (spec §4.5). Every guarded write — question create/update/
+# delete/reorder, host game update/delete, admin move — calls lock_game, then
+# assert_not_live, then writes. start_game takes the same lock. After the lock,
+# reads that decide the outcome must be locking reads (REPEATABLE READ).
+# ---------------------------------------------------------------------------
+
+
+async def lock_game(db: AsyncSession, game_id: int) -> Game:
+    """SELECT … FOR UPDATE on the game row, held until the transaction ends."""
+    game = (
+        await db.execute(
+            select(Game)
+            .where(Game.id == game_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if not game:
+        raise NotFoundError(f"Game {game_id} not found")
+    return game
+
+
+async def is_game_live(db: AsyncSession, redis: Redis, game_id: int) -> bool:
+    """An IN_PROGRESS session whose Redis room still exists. A row whose key
+    expired is stale, not live. Locking read: see the block comment above."""
+    room_codes = (
+        await db.execute(
+            select(GameSession.room_code)
+            .where(
+                GameSession.game_id == game_id,
+                GameSession.status == "IN_PROGRESS",
+            )
+            .with_for_update(read=True)
+        )
+    ).scalars()
+    for code in room_codes:
+        if await redis.exists(f"room:{code}"):
+            return True
+    return False
+
+
+async def assert_not_live(db: AsyncSession, redis: Redis, game_id: int) -> None:
+    if await is_game_live(db, redis, game_id):
+        raise BuzzerError("GAME_LIVE", "This game is being played right now", 409)
+
+
+# ---------------------------------------------------------------------------
 # Session lifecycle
 # ---------------------------------------------------------------------------
 
@@ -198,6 +245,17 @@ async def start_game(
     db: AsyncSession, redis: Redis, session: GameSession
 ) -> list[Question]:
     """Transition LOBBY → IN_PROGRESS. Returns ordered question list."""
+    # Same game-row lock as every guarded edit (lock_game), so a start and an
+    # edit serialize. The reads after it are locking reads: under REPEATABLE READ
+    # a plain SELECT would see the snapshot from this transaction's first read,
+    # missing an edit that committed while we waited (spec §4.5).
+    await lock_game(db, session.game_id)
+    await db.execute(
+        select(GameSession)
+        .where(GameSession.id == session.id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
     if session.status != "LOBBY":
         raise ConflictError(f"Cannot start a game in '{session.status}' state")
 
@@ -205,6 +263,8 @@ async def start_game(
         select(Question)
         .where(Question.game_id == session.game_id)
         .order_by(Question.order_index)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
     )
     questions = result.scalars().all()
     if not questions:

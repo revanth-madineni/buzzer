@@ -8,6 +8,7 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
+from redis.asyncio import Redis
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +19,7 @@ from ..models.course import Course, CourseRoster, UserCourseAccess
 from ..models.game import Game, Question, UserGameAccess
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
+from ..redis_client import get_redis
 from ..schemas.admin import (
     AdminSessionItem,
     CourseAccessEntry,
@@ -47,7 +49,7 @@ from ..schemas.admin import (
     UserWithAccessResponse,
 )
 from ..services import access_service as access
-from ..services import question_service
+from ..services import game_service, question_service
 from ..services.auth_service import hash_password
 from ..services.export_service import build_canvas_csv, build_session_csv
 from ..services.report_service import build_session_report
@@ -317,6 +319,7 @@ async def move_game(
     body: GameMoveRequest,
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> dict:
     """
     Assign a courseless game to a course, or move it to another one. Grants whose
@@ -324,13 +327,10 @@ async def move_game(
     dropped. confirm=false only reports them (no writes); the UI shows them first.
     Existing sessions keep their own course_id; `restricted` is unchanged.
     """
-    game = (
-        await db.execute(select(Game).where(Game.id == game_id).with_for_update())
-    ).scalar_one_or_none()
-    if not game:
-        raise NotFoundError(f"Game {game_id} not found")
+    game = await game_service.lock_game(db, game_id)
     if not await db.get(Course, body.course_id):
         raise NotFoundError(f"Course {body.course_id} not found")
+    await game_service.assert_not_live(db, redis, game.id)
 
     doomed = [
         user
@@ -418,10 +418,10 @@ async def create_question(
     body: QuestionCreate,
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> Question:
-    game = await db.get(Game, game_id)
-    if not game:
-        raise NotFoundError(f"Game {game_id} not found")
+    game = await game_service.lock_game(db, game_id)
+    await game_service.assert_not_live(db, redis, game.id)
     question = await question_service.create_question(db, game, body)
     await db.commit()
     return question
@@ -434,6 +434,7 @@ async def update_question(
     body: QuestionUpdate,
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> Question:
     result = await db.execute(
         select(Question).where(Question.id == question_id, Question.game_id == game_id)
@@ -441,7 +442,8 @@ async def update_question(
     question = result.scalar_one_or_none()
     if not question:
         raise NotFoundError(f"Question {question_id} not found in game {game_id}")
-
+    await game_service.lock_game(db, game_id)
+    await game_service.assert_not_live(db, redis, game_id)
     return await question_service.update_question(db, question, body)
 
 
@@ -451,6 +453,7 @@ async def delete_question(
     question_id: int,
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
     result = await db.execute(
         select(Question).where(Question.id == question_id, Question.game_id == game_id)
@@ -458,6 +461,8 @@ async def delete_question(
     question = result.scalar_one_or_none()
     if not question:
         raise NotFoundError(f"Question {question_id} not found in game {game_id}")
+    await game_service.lock_game(db, game_id)
+    await game_service.assert_not_live(db, redis, game_id)
     await question_service.delete_question(db, question)
 
 
@@ -467,11 +472,10 @@ async def reorder_questions(
     body: QuestionReorder,
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> None:
-    game = await db.get(Game, game_id)
-    if not game:
-        raise NotFoundError(f"Game {game_id} not found")
-
+    game = await game_service.lock_game(db, game_id)
+    await game_service.assert_not_live(db, redis, game.id)
     await question_service.reorder_questions(db, game, body.order)
 
 
