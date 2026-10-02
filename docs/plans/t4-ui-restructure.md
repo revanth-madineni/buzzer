@@ -646,9 +646,14 @@ today's session delete).
 ### 4.11 Frontend — host app (`frontend/host/src/`) — [T4]
 
 - `lib/api.ts`: add `put`, `patch`, `postForm` (multipart, no `Content-Type`) and `download` (Blob
-  + `Content-Disposition` filename), copied from `frontend/admin/src/lib/api.ts`. **[Extra]** read
-  errors as `body.message ?? (string detail) ?? "Invalid input"`, falling back to `HTTP <status>`.
-  Cut → `GAME_LIVE` / `ROSTER_CHANGED` / `GAME_RESTRICTED` show as `HTTP 409` / `HTTP 403`.
+  + `Content-Disposition` filename), copied from `frontend/admin/src/lib/api.ts`. **[T4]** Every
+  helper (including `postForm` and `download`) reads an error body as follows, so the pages can
+  show the §4.0 messages (e.g. `GAME_HAS_RESULTS` vs `GAME_LIVE`):
+  1. `body.message` if it is a string (the `BuzzerError` shape);
+  2. else `body.detail` if it is a string (`HTTPException`);
+  3. else `"Invalid input"` if `body.detail` is an array (422 `VALIDATION_ERROR`);
+  4. else `HTTP <status>`.
+  Today's helpers read only `detail`, so every `BuzzerError` shows as a bare `HTTP <status>`.
 - `App.tsx`: a `HostLayout` (course picker from `GET /game/my-courses` — every course for an
   admin, HOST courses for a USER; changing it navigates to the same sub-page for the new course;
   links to Games, Roster, Sessions; "Play" → `/home`; Sign out) wrapping, inside `RequireAuth`:
@@ -699,7 +704,8 @@ today's session delete).
   access: …"), then call with `confirm=true`.
 - `pages/CoursesPage.tsx`: `allow_guests` toggle.
 - `pages/UserDetailPage.tsx`: game-access list shows each game's course; no behavior change.
-- **[Extra]** `lib/api.ts`: same error-message fix as the host app.
+- **[T4]** `lib/api.ts`: same error-message fix as the host app (§4.11). The new move/access
+  flows surface `GAME_LIVE`, `NOT_FOUND` and similar errors.
 
 ### 4.13 Implementation order
 
@@ -802,7 +808,7 @@ Host frontend (`frontend/host/src/`): `lib/api.ts`, `App.tsx`, `pages/HomePage.t
 `pages/manage/{GamesPage,QuestionEditorPage,RosterPage,SessionsPage}.tsx`.
 
 Admin frontend (`frontend/admin/src/`): `App.tsx`, `pages/AccessPage.tsx` (new),
-`pages/GamesPage.tsx`, `pages/CoursesPage.tsx`, `pages/UserDetailPage.tsx`, `lib/api.ts` [Extra].
+`pages/GamesPage.tsx`, `pages/CoursesPage.tsx`, `pages/UserDetailPage.tsx`, `lib/api.ts`.
 
 Tests: new test files and `tests/integration/t4_helpers.py` under `tests/integration/` (§4.14);
 existing test files and fixtures unchanged. Context docs: §4.15.
@@ -893,3 +899,8 @@ reachable only by other clients or scripts. Fix it anyway.
   `SELECT`s see a stale snapshot. Fixed by requiring locking reads (`FOR SHARE`) after the lock,
   in `is_game_live` and `start_game`. `READ COMMITTED` was rejected because it changes isolation
   app-wide. The `is_game_live` cut note now also names deleting a running game.
+- **2026-10-01, v8** — the `lib/api.ts` error-message fix (host §4.11, admin §4.12) moves from
+  [Extra] to [T4]. The [T4] host GamesPage must show `GAME_HAS_RESULTS` vs `GAME_LIVE`, which is
+  impossible while the helpers read only `detail` (every `BuzzerError` showed as `HTTP 409`). The
+  precedence (message → string detail → "Invalid input" for validation arrays → `HTTP <status>`)
+  is now spelled out.
