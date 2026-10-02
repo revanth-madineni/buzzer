@@ -138,3 +138,33 @@ def usable_games_stmt(user: User, course_id: int | None = None) -> Select:
         )
         .where(or_(Game.restricted.is_(False), UserGameAccess.user_id.is_not(None)))
     )
+
+
+# ---------------------------------------------------------------------------
+# Grant holders (admin Access page and game move)
+# ---------------------------------------------------------------------------
+
+
+async def grant_holders(
+    db: AsyncSession, game_id: int, course_id: int | None
+) -> list[tuple[User, bool]]:
+    """
+    Users with a UserGameAccess grant on the game, each paired with whether they
+    hold HOST on `course_id` (has_course_host semantics: ADMIN counts as HOST).
+    A grant whose holder lacks HOST has no effect. course_id None -> only admins.
+    """
+    result = await db.execute(
+        select(User, UserCourseAccess.role)
+        .join(UserGameAccess, UserGameAccess.user_id == User.id)
+        .outerjoin(
+            UserCourseAccess,
+            and_(
+                UserCourseAccess.user_id == User.id,
+                UserCourseAccess.course_id == course_id,
+                UserCourseAccess.role == "HOST",
+            ),
+        )
+        .where(UserGameAccess.game_id == game_id)
+        .order_by(User.username, User.netid, User.id)
+    )
+    return [(user, user.role == "ADMIN" or role is not None) for user, role in result]

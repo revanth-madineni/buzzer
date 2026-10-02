@@ -6,6 +6,8 @@ before the extraction; host paths are added with the host router.
 
 from __future__ import annotations
 
+import json
+
 from . import t4_helpers
 from .t4_helpers import T4World, assert_error
 
@@ -168,3 +170,81 @@ def test_admin_roster_without_required_columns_changes_nothing(t4: T4World):
     assert r.status_code == 200, r.text
     assert r.json()["errors"][0].startswith("Missing required columns")
     assert roster_state(t4, course) == before
+
+
+# ---------------------------------------------------------------------------
+# Admin: courses (allow_guests) and game import (course_id form field)
+# ---------------------------------------------------------------------------
+
+
+def test_admin_course_allow_guests(t4: T4World):
+    course = t4.course()
+    r = t4.request("GET", f"/admin/courses/{course}")
+    assert r.status_code == 200, r.text
+    assert r.json()["allow_guests"] is True
+
+    r = t4.request("PUT", f"/admin/courses/{course}", json={"allow_guests": False})
+    assert r.status_code == 200, r.text
+    assert t4.request("GET", f"/admin/courses/{course}").json()["allow_guests"] is False
+
+    r = t4.request(
+        "POST",
+        "/admin/courses",
+        json={"name": f"T4 Course {t4.tag}ng", "semester": "T4", "allow_guests": False},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["allow_guests"] is False
+
+
+def bundle(game: dict) -> bytes:
+    return json.dumps(
+        {
+            "format": "buzzer/game",
+            "version": 1,
+            "game": game,
+            "questions": [
+                {**MC_QUESTION, "prompt": "<script>x</script>imported"},
+            ],
+        }
+    ).encode()
+
+
+def import_game(t4: T4World, content: bytes, course_id: int | None = None):
+    data = {} if course_id is None else {"course_id": str(course_id)}
+    return t4.request(
+        "POST",
+        "/admin/games/import",
+        files={"file": ("game.json", content, "application/json")},
+        data=data,
+    )
+
+
+def test_admin_import_attaches_course_from_form_field(t4: T4World):
+    course = t4.course()
+    r = import_game(t4, bundle({"title": f"T4 Import {t4.tag}"}), course)
+    assert r.status_code == 201, r.text
+    game = r.json()["game_id"]
+    t4.track_game(game)
+    assert t4.get_game(game)["course_id"] == course
+    prompts = [
+        q["prompt"] for q in t4.request("GET", f"/admin/games/{game}/questions").json()
+    ]
+    assert prompts == ["ximported"]
+
+    r = import_game(t4, bundle({"title": f"T4 Import {t4.tag}b"}))
+    assert r.status_code == 201, r.text
+    t4.track_game(r.json()["game_id"])
+    assert t4.get_game(r.json()["game_id"])["course_id"] is None
+
+
+def test_admin_import_rejects_unknown_course_and_bundle_course_id(t4: T4World):
+    def titles() -> set[str]:
+        return {g["title"] for g in t4.request("GET", "/admin/games").json()}
+
+    title = f"T4 Import {t4.tag}x"
+    assert_error(
+        import_game(t4, bundle({"title": title}), 2_000_000_000), 404, "NOT_FOUND"
+    )
+    r = import_game(t4, bundle({"title": title, "course_id": t4.course()}))
+    assert r.status_code == 422, r.text
+    assert title not in titles()

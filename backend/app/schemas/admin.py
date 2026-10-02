@@ -88,11 +88,17 @@ class RosterImportPayload(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class GameCreate(BaseModel):
+class GameFields(BaseModel):
+    """A game's own fields. Also validates an import bundle's `game` block,
+    which must not carry a course_id (spec §4.7)."""
+
     model_config = ConfigDict(extra="forbid")
     title: str = Field(..., min_length=1, max_length=255)
     description: str = Field("", max_length=5000)
     max_players: int = Field(150, ge=1, le=500)
+
+
+class GameCreate(GameFields):
     course_id: int | None = None
 
 

@@ -75,25 +75,40 @@ class T4World:
         assert r.status_code == 201, r.text
         return r.json()["id"]
 
-    def game(self, course_id: int | None = None) -> int:
-        """A courseless admin game, attached to `course_id` by a first admin room."""
+    def game(self, course_id: int | None = None, restricted: bool = False) -> int:
+        """An admin-created game in `course_id` (courseless if None)."""
+        self._n += 1
         r = self.request(
-            "POST", "/admin/games", json={"title": f"T4 Game {self.tag}{self._n}"}
+            "POST",
+            "/admin/games",
+            json={"title": f"T4 Game {self.tag}{self._n}", "course_id": course_id},
         )
         assert r.status_code == 201, r.text
         game_id = r.json()["id"]
-        self._games.append(game_id)
-        if course_id is not None:
-            r = self.create_room(game_id, course_id)
-            assert r.status_code == 201, r.text
-            self.delete_session(r.json()["session_id"])
-            assert self.get_game(game_id)["course_id"] == course_id
+        self.track_game(game_id)
+        if restricted:
+            self.set_restricted(game_id, True)
         return game_id
+
+    def track_game(self, game_id: int) -> None:
+        self._games.append(game_id)
 
     def get_game(self, game_id: int) -> dict:
         r = self.request("GET", f"/admin/games/{game_id}")
         assert r.status_code == 200, r.text
         return r.json()
+
+    def set_restricted(self, game_id: int, restricted: bool) -> None:
+        r = self.request(
+            "PUT", f"/admin/games/{game_id}", json={"restricted": restricted}
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["restricted"] is restricted
+
+    def admin_session(self, session_id: str) -> dict | None:
+        r = self.request("GET", "/admin/sessions")
+        assert r.status_code == 200, r.text
+        return next((s for s in r.json() if s["session_id"] == session_id), None)
 
     def user(self, prefix: str = "t4_host") -> T4User:
         username = self._unique(prefix)
