@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
 
 interface Course { id: number; name: string; semester: string }
-interface Game { id: number; title: string }
+interface Game { id: number; title: string; course_id: number | null }
 interface ActiveSession {
   session_id: string;
   room_code: string;
@@ -24,7 +24,17 @@ export default function HomePage() {
   const [gameId, setGameId] = useState<number | ''>('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const navigate = useNavigate();
+
+  // A game can only be run in its own course.
+  const courseGames = games.filter(g => g.course_id === courseId);
+
+  function selectCourse(id: number | '') {
+    setCourseId(id);
+    const inCourse = games.filter(g => g.course_id === id);
+    setGameId(inCourse.length === 1 ? inCourse[0].id : '');
+  }
 
   useEffect(() => {
     Promise.all([
@@ -35,8 +45,12 @@ export default function HomePage() {
       setCourses(c);
       setGames(g);
       setActiveSessions(s);
-      if (c.length === 1) setCourseId(c[0].id);
-      if (g.length === 1) setGameId(g[0].id);
+      if (c.length === 1) {
+        setCourseId(c[0].id);
+        const inCourse = g.filter(x => x.course_id === c[0].id);
+        if (inCourse.length === 1) setGameId(inCourse[0].id);
+      }
+      setLoaded(true);
     }).catch(() => setError('Failed to load courses or games. Are you still logged in?'));
   }, []);
 
@@ -136,31 +150,52 @@ export default function HomePage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {loaded && courses.length === 0 ? (
+            <p className="text-slate-300 text-sm">
+              You don't host any courses yet — ask an admin for HOST access
+            </p>
+          ) : (
+          <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1">Course</label>
-            <select
-              value={courseId}
-              onChange={e => setCourseId(Number(e.target.value))}
-              className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">Select a course…</option>
-              {courses.map(c => (
-                <option key={c.id} value={c.id}>{c.name} — {c.semester}</option>
-              ))}
-            </select>
+            <div className="flex gap-2">
+              <select
+                value={courseId}
+                onChange={e => selectCourse(e.target.value ? Number(e.target.value) : '')}
+                className="flex-1 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Select a course…</option>
+                {courses.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} — {c.semester}</option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                disabled={!courseId}
+                onClick={() => navigate(`/courses/${courseId}/games`)}
+              >
+                Manage this course
+              </Button>
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1">Quiz</label>
             <select
               value={gameId}
-              onChange={e => setGameId(Number(e.target.value))}
+              onChange={e => setGameId(e.target.value ? Number(e.target.value) : '')}
+              disabled={!courseId}
               className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="">Select a quiz…</option>
-              {games.map(g => (
+              {courseGames.map(g => (
                 <option key={g.id} value={g.id}>{g.title}</option>
               ))}
             </select>
+            {courseId !== '' && courseGames.length === 0 && (
+              <p className="text-slate-500 text-xs mt-1">
+                No quizzes you can run in this course — create one under "Manage this course".
+              </p>
+            )}
           </div>
           {error && <p className="text-red-400 text-sm">{error}</p>}
           <Button
@@ -171,6 +206,8 @@ export default function HomePage() {
           >
             {loading ? 'Creating room…' : 'Create Room'}
           </Button>
+          </>
+          )}
         </CardContent>
       </Card>
     </div>
