@@ -363,3 +363,114 @@ def test_host_question_from_another_game_is_not_found(t4: T4World):
         )
         assert_error(r, 404, "NOT_FOUND")
     assert question_ids(t4, "/host", game_a, host.token) == [qid]
+
+
+# ---------------------------------------------------------------------------
+# Host: roster (Canvas gradebook CSV only; default mode add_update)
+# ---------------------------------------------------------------------------
+
+
+def host_upload(
+    t4: T4World, course_id: int, token: str, content: bytes, mode: str | None = None
+):
+    return t4.request(
+        "POST",
+        f"/host/courses/{course_id}/roster",
+        token,
+        files={"file": ("roster.csv", content, "text/csv")},
+        data={} if mode is None else {"mode": mode},
+    )
+
+
+def test_host_roster_add_update_never_deactivates(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    n = [f"t4n{t4.tag}{i}" for i in range(3)]
+
+    r = host_upload(t4, course, host.token, gradebook_csv(n))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"imported": 3, "updated": 0, "deactivated": 0, "errors": []}
+
+    r = host_upload(t4, course, host.token, gradebook_csv(n[:1]))  # default mode
+    assert r.status_code == 200, r.text
+    assert r.json()["deactivated"] == 0
+    assert roster_state(t4, course) == {n[0]: True, n[1]: True, n[2]: True}
+
+    # add_update reactivates a listed inactive entry.
+    assert upload(t4, course, gradebook_csv(n[:2])).json()["deactivated"] == 1
+    r = host_upload(t4, course, host.token, gradebook_csv([n[2]]), "add_update")
+    assert r.json()["updated"] == 1
+    assert roster_state(t4, course) == {n[0]: True, n[1]: True, n[2]: True}
+
+    r = t4.request("GET", f"/host/courses/{course}/roster", host.token)
+    assert r.status_code == 200, r.text
+    assert {e["netid"] for e in r.json()} == set(n)
+
+
+def test_host_roster_replace(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    player = t4.user("t4_player")
+    t4.grant_course(player, course, "PLAYER")
+    n = [f"t4n{t4.tag}{i}" for i in range(3)]
+    assert host_upload(t4, course, host.token, gradebook_csv(n)).status_code == 200
+
+    r = host_upload(t4, course, host.token, gradebook_csv(n[1:]), "replace")
+    assert r.status_code == 200, r.text
+    assert r.json()["deactivated"] == 1
+    assert roster_state(t4, course) == {n[0]: False, n[1]: True, n[2]: True}
+
+    # Inactive entries are listed for hosts too.
+    r = t4.request("GET", f"/host/courses/{course}/roster", host.token)
+    assert {e["netid"]: e["is_active"] for e in r.json()} == roster_state(t4, course)
+
+    # Roster uploads never touch PLAYER/HOST grants.
+    r = t4.request("GET", f"/admin/courses/{course}/access")
+    assert {e["user_id"]: e["role"] for e in r.json()} == {
+        host.id: "HOST",
+        player.id: "PLAYER",
+    }
+
+
+def test_host_roster_no_valid_rows_or_missing_columns_change_nothing(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    n = [f"t4n{t4.tag}{i}" for i in range(2)]
+    assert host_upload(t4, course, host.token, gradebook_csv(n)).status_code == 200
+    before = roster_state(t4, course)
+
+    only_bad_rows = gradebook_csv([], extra_rows='"Nobody, Here",9,9,,S1\n')
+    r = host_upload(t4, course, host.token, only_bad_rows, "replace")
+    assert r.status_code == 200, r.text
+    assert r.json()["deactivated"] == 0 and r.json()["errors"]
+    assert roster_state(t4, course) == before
+
+    r = host_upload(t4, course, host.token, b"Name,Email\nA,a@wisc.edu\n", "replace")
+    assert r.status_code == 200, r.text
+    assert r.json()["errors"][0].startswith("Missing required columns")
+    assert roster_state(t4, course) == before
+
+
+def test_host_roster_access_and_mode_validation(t4: T4World):
+    course_a, course_b = t4.course(), t4.course()
+    host_b = host_of(t4, course_b)
+    player = t4.user("t4_player")
+    t4.grant_course(player, course_a, "PLAYER")
+    content = gradebook_csv([f"t4n{t4.tag}0"])
+
+    for token in (host_b.token, player.token, t4.user().token):
+        assert_error(
+            t4.request("GET", f"/host/courses/{course_a}/roster", token),
+            403,
+            "FORBIDDEN",
+        )
+        assert_error(host_upload(t4, course_a, token, content), 403, "FORBIDDEN")
+    assert roster_state(t4, course_a) == {}
+
+    host_a = host_of(t4, course_a)
+    assert_error(
+        host_upload(t4, course_a, host_a.token, content, "wipe"),
+        422,
+        "VALIDATION_ERROR",
+    )
+    assert roster_state(t4, course_a) == {}

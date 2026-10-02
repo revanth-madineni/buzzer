@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +22,7 @@ from ..common.dependencies import (
     require_user,
 )
 from ..database import get_db
-from ..models.course import Course
+from ..models.course import Course, CourseRoster
 from ..models.game import Game, Question
 from ..models.user import User
 from ..schemas.admin import (
@@ -31,10 +31,18 @@ from ..schemas.admin import (
     QuestionReorder,
     QuestionResponse,
     QuestionUpdate,
+    RosterEntryResponse,
+    RosterUploadResult,
 )
-from ..schemas.host import HostGameCreate, HostGameListItem, HostGameUpdate
+from ..schemas.host import (
+    HostGameCreate,
+    HostGameListItem,
+    HostGameUpdate,
+    RosterUploadMode,
+)
 from ..services import access_service as access
 from ..services import question_service
+from ..services.roster_service import process_roster_csv
 
 router = APIRouter(prefix="/host", tags=["host"])
 logger = structlog.get_logger()
@@ -168,3 +176,37 @@ async def delete_question(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     await question_service.delete_question(db, question)
+
+
+# ---------------------------------------------------------------------------
+# Roster. Hosts upload only the Canvas gradebook CSV (process_roster_csv); the
+# admin column-mapping import stays admin-only. Roster rows never touch
+# UserCourseAccess (PLAYER/HOST grants stay admin-only).
+# ---------------------------------------------------------------------------
+
+
+@router.get("/courses/{course_id}/roster", response_model=list[RosterEntryResponse])
+async def list_roster(
+    course: Annotated[Course, Depends(require_course_host)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[CourseRoster]:
+    """Active and inactive entries."""
+    result = await db.execute(
+        select(CourseRoster)
+        .where(CourseRoster.course_id == course.id)
+        .order_by(CourseRoster.full_name)
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/courses/{course_id}/roster", response_model=RosterUploadResult)
+async def upload_roster(
+    file: Annotated[UploadFile, File(description="Canvas gradebook CSV export")],
+    course: Annotated[Course, Depends(require_course_host)],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    mode: Annotated[RosterUploadMode, Form()] = "add_update",
+) -> RosterUploadResult:
+    result = await process_roster_csv(db, course.id, await file.read(), mode)
+    logger.info("host_roster_uploaded", course_id=course.id, user_id=user.id, mode=mode)
+    return result
