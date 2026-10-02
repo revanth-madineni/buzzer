@@ -1,21 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, List, Upload, Trash2, Pencil } from 'lucide-react';
+import { Plus, List, Upload, Trash2, Pencil, Lock, ArrowRightLeft } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
 import { Input } from '../components/ui/input';
+import { MoveGamePanel, type MoveCourse } from '../components/MoveGamePanel';
 
 interface Game {
   id: number;
   title: string;
   description: string;
   max_players: number;
+  course_id: number | null;
+  restricted: boolean;
   created_at: string;
 }
 
+const selectClass =
+  'w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+
 export default function GamesPage() {
   const [games, setGames] = useState<Game[]>([]);
+  const [courses, setCourses] = useState<MoveCourse[]>([]);
+  const [courseId, setCourseId] = useState<number | ''>('');
+  const [importCourseId, setImportCourseId] = useState<number | ''>('');
+  const [moving, setMoving] = useState<Game | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -34,8 +44,12 @@ export default function GamesPage() {
 
   async function load() {
     try {
-      const data = await api.get<Game[]>('/admin/games');
+      const [data, cs] = await Promise.all([
+        api.get<Game[]>('/admin/games'),
+        api.get<MoveCourse[]>('/admin/courses'),
+      ]);
       setGames(data);
+      setCourses(cs);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load games');
     } finally {
@@ -47,6 +61,7 @@ export default function GamesPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (courseId === '') return;
     setSaving(true);
     setError('');
     try {
@@ -54,8 +69,9 @@ export default function GamesPage() {
         title,
         description,
         max_players: Number(maxPlayers),
+        course_id: courseId,
       });
-      setTitle(''); setDescription(''); setMaxPlayers('150');
+      setTitle(''); setDescription(''); setMaxPlayers('150'); setCourseId('');
       setShowForm(false);
       await load();
     } catch (err) {
@@ -94,12 +110,13 @@ export default function GamesPage() {
 
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || importCourseId === '') return;
     setImporting(true);
     setError('');
     try {
       const form = new FormData();
       form.append('file', file);
+      form.append('course_id', String(importCourseId));
       const result = await api.postForm<{ game_id: number }>('/admin/games/import', form);
       await load();
       navigate(`/games/${result.game_id}/questions`);
@@ -121,13 +138,34 @@ export default function GamesPage() {
     }
   }
 
+  function courseLabel(id: number): string {
+    const c = courses.find((x) => x.id === id);
+    return c ? `${c.name} — ${c.semester}` : `Course ${id}`;
+  }
+
   return (
     <div className="p-8 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-slate-100">Games</h2>
         <div className="flex gap-2">
           <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
-          <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={importing}>
+          <select
+            value={importCourseId}
+            onChange={(e) => setImportCourseId(e.target.value ? Number(e.target.value) : '')}
+            className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-100"
+            title="Course to import the game into"
+          >
+            <option value="">Import into course…</option>
+            {courses.map((c) => (
+              <option key={c.id} value={c.id}>{c.name} — {c.semester}</option>
+            ))}
+          </select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fileRef.current?.click()}
+            disabled={importing || importCourseId === ''}
+          >
             <Upload size={14} className="mr-1" />
             {importing ? 'Importing\u2026' : 'Import JSON'}
           </Button>
@@ -144,6 +182,17 @@ export default function GamesPage() {
           <CardHeader><h3 className="text-lg font-semibold text-slate-100">Create Game</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleCreate} className="space-y-3">
+              <select
+                value={courseId}
+                onChange={(e) => setCourseId(e.target.value ? Number(e.target.value) : '')}
+                className={selectClass}
+                required
+              >
+                <option value="">Course…</option>
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name} — {c.semester}</option>
+                ))}
+              </select>
               <Input placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} required />
               <textarea
                 placeholder="Description (optional)"
@@ -210,13 +259,37 @@ export default function GamesPage() {
       ) : (
         <div className="space-y-3">
           {games.map((g) => (
-            <Card key={g.id} className="flex items-center justify-between px-6 py-4">
+            <Card key={g.id} className="px-6 py-4 space-y-3">
+            <div className="flex items-center justify-between">
               <div>
-                <p className="font-semibold text-slate-100">{g.title}</p>
+                <p className="font-semibold text-slate-100 flex items-center gap-2">
+                  {g.title}
+                  {g.restricted && (
+                    <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-400">
+                      <Lock size={11} /> Restricted
+                    </span>
+                  )}
+                  {g.course_id === null && (
+                    <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-xs font-medium text-red-400">
+                      Unassigned
+                    </span>
+                  )}
+                </p>
+                {g.course_id !== null && (
+                  <p className="text-slate-400 text-sm">{courseLabel(g.course_id)}</p>
+                )}
                 {g.description && <p className="text-slate-400 text-sm mt-0.5 line-clamp-1">{g.description}</p>}
                 <p className="text-slate-500 text-xs mt-0.5">Max {g.max_players} players</p>
               </div>
               <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  title="Move / assign to course"
+                  onClick={() => setMoving(moving?.id === g.id ? null : g)}
+                >
+                  <ArrowRightLeft size={14} />
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -239,6 +312,15 @@ export default function GamesPage() {
                   <Trash2 size={14} />
                 </Button>
               </div>
+            </div>
+            {moving?.id === g.id && (
+              <MoveGamePanel
+                game={g}
+                courses={courses}
+                onDone={() => { setMoving(null); void load(); }}
+                onCancel={() => setMoving(null)}
+              />
+            )}
             </Card>
           ))}
         </div>
