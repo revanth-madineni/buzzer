@@ -436,10 +436,10 @@ change for inputs that are valid today.
   game's question-ID set. (Today invalid reorders return a generic 409 `CONFLICT`; this changes
   only invalid input.)
 - `is_game_live(db, redis, game_id) -> bool` — **[Extra]** (cut → a host can change questions under
-  a running game):
+  a running game, or **delete** a running game whose players have not answered yet):
 
   ```
-  for s in GameSession where game_id = :g and status = 'IN_PROGRESS':
+  for s in GameSession where game_id = :g and status = 'IN_PROGRESS'   -- FOR SHARE (locking read)
       if redis EXISTS room:{s.room_code}: return True
   return False                      # an IN_PROGRESS row whose Redis key expired is stale, not live
   ```
@@ -456,6 +456,22 @@ change for inputs that are valid today.
   setting IN_PROGRESS. Whichever runs first wins: an edit that gets the lock first is included in
   the game; a start that gets it first makes the edit see a live game → 409. (`start_game` already
   commits immediately, so the lock is short.)
+
+  **Locking reads after the lock (MySQL REPEATABLE READ).** The app runs at MySQL's default
+  isolation, `REPEATABLE READ`. Under it, a plain `SELECT` sees the snapshot taken at the
+  transaction's *first* read, and both sides have read before taking the lock:
+  - an edit: `require_game_host` loaded the game;
+  - a start: the gateway loaded the session.
+  So the lock alone does not close the race. An edit that waited would still see LOBBY, and a
+  start that waited would still see the old question set. Rule: **once a transaction holds the
+  game-row lock, every read that decides the outcome is a locking read** (`FOR SHARE`), which
+  sees the latest committed rows:
+  - `is_game_live` reads the IN_PROGRESS session rows `FOR SHARE`;
+  - `start_game` re-reads the session's status and the questions `FOR SHARE` after taking the
+    lock.
+  Deadlock check: both sides take the game row first, and the other writers of session rows
+  (`complete_game`, `abandon_game`) take no game lock and commit immediately. Switching the
+  engine to `READ COMMITTED` was considered and rejected: it changes isolation app-wide.
 
   Admin question endpoints need Redis for this check: add `redis = Depends(get_redis)` to them, as
   `routers/game.py` endpoints already do.
@@ -872,3 +888,8 @@ reachable only by other clients or scripts. Fix it anyway.
   valid (`if seen_netids:`), so such an upload changes nothing and returns 200 with `errors`.
   Keeping today's behavior avoids changing the admin API in a no-behavior-change step. §4.5
   now requires the refactor to keep that guard, and the §4.14 roster test asserts it.
+- **2026-10-01, v7** — §4.5 start race: the game-row lock alone does not close it under MySQL's
+  default `REPEATABLE READ`, because both sides read before taking the lock, so their plain
+  `SELECT`s see a stale snapshot. Fixed by requiring locking reads (`FOR SHARE`) after the lock,
+  in `is_game_live` and `start_game`. `READ COMMITTED` was rejected because it changes isolation
+  app-wide. The `is_game_live` cut note now also names deleting a running game.
