@@ -24,8 +24,7 @@ Branch names follow the repo's existing `<type>/<kebab-name>` convention (`docs/
 | Deliverable | Branch | Contents |
 |---|---|---|
 | This design doc (T3) | `docs/design-t4-ui-restructure` | This file only. Merged **before** any implementation branch is opened. |
-| T4 backend + its T5 tests | `feat/t4-host-admin-backend` | §4.1–§4.10, migration report script, backend tests (§4.14), backend context-doc updates (§4.15). |
-| T4 frontend | `feat/t4-host-admin-frontend` | §4.11–§4.12, frontend context-doc updates. Branched from `main` **after** the backend MR merges (it calls the new API). |
+| T4 (backend + frontend) and its T5 tests | `feat/t4-host-admin` | §4.1–§4.15: backend (§4.1–§4.10), migration report script, frontend (§4.11–§4.12), tests (§4.14), and all context-doc updates (§4.15). One branch, one MR. |
 | Unrelated bug fix | `fix/admin-rejoin-becomes-host` | See "Separate deliverable" at the end. Not part of T4. |
 
 ---
@@ -657,7 +656,9 @@ today's session delete).
 
 ### 4.13 Implementation order
 
-On `feat/t4-host-admin-backend`:
+All steps on `feat/t4-host-admin`, backend first, then frontend:
+
+Backend
 1. Migration 004 + models + schemas (§4.1, §4.2). Run against a copy of real data; check the
    backfill.
 2. `access_service` + dependencies (§4.3); `create_room`, `my-games` (§4.4).
@@ -666,7 +667,7 @@ On `feat/t4-host-admin-backend`:
 4. Admin additions (§4.7), host router (§4.8), `main.py` registration.
 5. [Extra] backend items in any order. T5 tests alongside each step. Backend context docs.
 
-On `feat/t4-host-admin-frontend` (after the backend MR merges):
+Frontend (same branch, built against the new API from steps 1–5)
 6. Host frontend (§4.11), admin frontend (§4.12), [Extra] frontend items, frontend context docs.
 
 ### 4.14 Integration tests — [T5]
@@ -733,10 +734,10 @@ on `error` codes from §4.0 and re-read state after each write.
 
 ### 4.15 Context hierarchy updates
 
-Per `.claude/rules/context-sync.md`, edit (do not regenerate) on the branch that changes the code:
-backend branch — `backend/app/`, `models/`, `schemas/`, `common/`, `services/`, `routers/`,
-`websocket/` `CLAUDE.md`; frontend branch — `frontend/`, `frontend/host/src/` + `pages/` + `lib/`,
-`frontend/admin/src/` + `pages/` + `lib/` `CLAUDE.md`.
+Per `.claude/rules/context-sync.md`, edit (do not regenerate), all on `feat/t4-host-admin`
+alongside the code they describe: backend — `backend/app/`, `models/`, `schemas/`, `common/`,
+`services/`, `routers/`, `websocket/` `CLAUDE.md`; frontend — `frontend/`, `frontend/host/src/` +
+`pages/` + `lib/`, `frontend/admin/src/` + `pages/` + `lib/` `CLAUDE.md`.
 
 ### 4.16 Files touched
 
@@ -816,3 +817,9 @@ reachable only by other clients or scripts. Fix it anyway.
   unknown course; T5 test-data naming and teardown; "Manage this course" and AccessPage endpoints
   named. Decision: host game delete is also blocked (`GAME_HAS_RESULTS`) when **any** session has
   scores, so partial results from ABANDONED games are never silently deleted.
+- **2026-10-01, v4** — all of T4 (backend + frontend, §4.1–§4.15) moves to a single branch,
+  `feat/t4-host-admin`, replacing `feat/t4-host-admin-backend` and `feat/t4-host-admin-frontend`.
+  Why: there is one implementer, so separate MRs add coordination with no review benefit, and a
+  single branch lets the UI be tested against the new API as it is built rather than waiting for a
+  backend merge. Implementation order is unchanged (backend first, then frontend).
+  `fix/admin-rejoin-becomes-host` stays separate.
