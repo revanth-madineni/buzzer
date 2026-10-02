@@ -1,0 +1,170 @@
+"""
+T4 management tests (spec §4.14): questions and rosters through the shared
+services (question_service, roster_service). Admin paths must behave exactly as
+before the extraction; host paths are added with the host router.
+"""
+
+from __future__ import annotations
+
+from . import t4_helpers
+from .t4_helpers import T4World, assert_error
+
+t4 = t4_helpers.t4  # fixture
+
+MC_QUESTION = {
+    "type": "multiple_choice",
+    "grading_type": "ACCURACY",
+    "config": {"options": ["A", "B"]},
+    "answer_data": {"answer_points": [1, 0]},
+    "points_value": 1,
+}
+
+
+def question_ids(t4: T4World, prefix: str, game_id: int, token: str | None = None):
+    r = t4.request("GET", f"{prefix}/games/{game_id}/questions", token)
+    assert r.status_code == 200, r.text
+    return [q["id"] for q in r.json()]
+
+
+# ---------------------------------------------------------------------------
+# Questions
+# ---------------------------------------------------------------------------
+
+
+def test_admin_question_round_trip_and_sanitizing(t4: T4World):
+    game = t4.game()
+    base = f"/admin/games/{game}/questions"
+
+    r = t4.request(
+        "POST",
+        base,
+        json={**MC_QUESTION, "prompt": "<script>alert(1)</script><b>Bold</b> one"},
+    )
+    assert r.status_code == 201, r.text
+    q1 = r.json()
+    assert "<script" not in q1["prompt"]
+    assert "<b>Bold</b> one" in q1["prompt"]
+    assert q1["order_index"] == 0
+
+    r = t4.request("POST", base, json={**MC_QUESTION, "prompt": "two"})
+    assert r.status_code == 201, r.text
+    q2 = r.json()
+    assert q2["order_index"] == 1
+
+    # Partial update: only sent, non-null fields change; prompt is sanitized.
+    r = t4.request(
+        "PUT",
+        f"{base}/{q1['id']}",
+        json={"prompt": '<img src=x onerror="alert(1)">safe', "points_value": 5},
+    )
+    assert r.status_code == 200, r.text
+    updated = r.json()
+    assert updated["prompt"] == "safe"
+    assert updated["points_value"] == 5
+    assert updated["config"] == MC_QUESTION["config"]
+
+    r = t4.request("POST", f"{base}/reorder", json={"order": [q2["id"], q1["id"]]})
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/admin", game) == [q2["id"], q1["id"]]
+
+    # Invalid reorder keeps today's generic 409 CONFLICT (INVALID_ORDER is [Extra]).
+    r = t4.request("POST", f"{base}/reorder", json={"order": [q2["id"]]})
+    assert_error(r, 409, "CONFLICT")
+    assert question_ids(t4, "/admin", game) == [q2["id"], q1["id"]]
+
+    r = t4.request("DELETE", f"{base}/{q1['id']}")
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/admin", game) == [q2["id"]]
+
+
+def test_admin_question_in_another_game_is_not_found(t4: T4World):
+    game_a, game_b = t4.game(), t4.game()
+    r = t4.request(
+        "POST", f"/admin/games/{game_a}/questions", json={**MC_QUESTION, "prompt": "q"}
+    )
+    assert r.status_code == 201, r.text
+    qid = r.json()["id"]
+
+    r = t4.request(
+        "PUT", f"/admin/games/{game_b}/questions/{qid}", json={"prompt": "x"}
+    )
+    assert_error(r, 404, "NOT_FOUND")
+    r = t4.request("DELETE", f"/admin/games/{game_b}/questions/{qid}")
+    assert_error(r, 404, "NOT_FOUND")
+
+
+# ---------------------------------------------------------------------------
+# Roster (admin upload is mode=replace)
+# ---------------------------------------------------------------------------
+
+
+def gradebook_csv(netids: list[str], extra_rows: str = "") -> bytes:
+    lines = ["Student,ID,SIS User ID,SIS Login ID,Section"]
+    lines.append("Points Possible,,,,")
+    for i, netid in enumerate(netids):
+        lines.append(f'"Last{i}, First{i}",{i},{i},{netid}@wisc.edu,S1')
+    return ("\n".join(lines) + "\n" + extra_rows).encode()
+
+
+def upload(t4: T4World, course_id: int, content: bytes):
+    return t4.request(
+        "POST",
+        f"/admin/courses/{course_id}/roster",
+        files={"file": ("roster.csv", content, "text/csv")},
+    )
+
+
+def roster_state(t4: T4World, course_id: int) -> dict[str, bool]:
+    r = t4.request("GET", f"/admin/courses/{course_id}/roster")
+    assert r.status_code == 200, r.text
+    return {e["netid"]: e["is_active"] for e in r.json()}
+
+
+def test_admin_roster_replace_deactivates_missing_entries(t4: T4World):
+    course = t4.course()
+    n = [f"t4n{t4.tag}{i}" for i in range(3)]
+
+    r = upload(t4, course, gradebook_csv(n))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"imported": 3, "updated": 0, "deactivated": 0, "errors": []}
+
+    r = upload(t4, course, gradebook_csv(n[:2]))
+    assert r.status_code == 200, r.text
+    assert r.json()["deactivated"] == 1
+    assert roster_state(t4, course) == {n[0]: True, n[1]: True, n[2]: False}
+
+    # Re-listing a deactivated entry reactivates it.
+    r = upload(t4, course, gradebook_csv(n))
+    assert r.status_code == 200, r.text
+    assert roster_state(t4, course) == {n[0]: True, n[1]: True, n[2]: True}
+
+
+def test_admin_roster_upload_with_no_valid_rows_changes_nothing(t4: T4World):
+    """The `if seen_netids` guard (spec §4.5): no valid rows must not wipe the roster."""
+    course = t4.course()
+    n = [f"t4n{t4.tag}{i}" for i in range(2)]
+    assert upload(t4, course, gradebook_csv(n)).status_code == 200
+    before = roster_state(t4, course)
+
+    only_bad_rows = gradebook_csv([], extra_rows='"Nobody, Here",9,9,,S1\n')
+    only_points_possible = gradebook_csv([])
+    for content in (only_bad_rows, only_points_possible):
+        r = upload(t4, course, content)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert (body["imported"], body["updated"], body["deactivated"]) == (0, 0, 0)
+        assert roster_state(t4, course) == before
+    assert body["errors"] == []  # Points Possible alone is skipped, not an error
+    assert upload(t4, course, only_bad_rows).json()["errors"]
+
+
+def test_admin_roster_without_required_columns_changes_nothing(t4: T4World):
+    course = t4.course()
+    n = [f"t4n{t4.tag}{i}" for i in range(2)]
+    assert upload(t4, course, gradebook_csv(n)).status_code == 200
+    before = roster_state(t4, course)
+
+    r = upload(t4, course, b"Name,Email\nSomeone,someone@wisc.edu\n")
+    assert r.status_code == 200, r.text
+    assert r.json()["errors"][0].startswith("Missing required columns")
+    assert roster_state(t4, course) == before

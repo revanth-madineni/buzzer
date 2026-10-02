@@ -5,7 +5,6 @@ import json
 import uuid
 from typing import Annotated
 
-import bleach
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -42,6 +41,7 @@ from ..schemas.admin import (
     UserUpdate,
     UserWithAccessResponse,
 )
+from ..services import question_service
 from ..services.auth_service import hash_password
 from ..services.export_service import build_canvas_csv, build_session_csv
 from ..services.report_service import build_session_report
@@ -52,7 +52,6 @@ _SUPPORTED_IMPORT_VERSION = 1
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = structlog.get_logger()
 
-_PROMPT_TAGS = ["b", "i", "br", "u"]
 
 # ---------------------------------------------------------------------------
 # Courses
@@ -300,12 +299,7 @@ async def list_questions(
     game = await db.get(Game, game_id)
     if not game:
         raise NotFoundError(f"Game {game_id} not found")
-    result = await db.execute(
-        select(Question)
-        .where(Question.game_id == game_id)
-        .order_by(Question.order_index)
-    )
-    return result.scalars().all()
+    return await question_service.list_questions(db, game)
 
 
 @router.post(
@@ -320,39 +314,7 @@ async def create_question(
     game = await db.get(Game, game_id)
     if not game:
         raise NotFoundError(f"Game {game_id} not found")
-
-    # Sanitize prompt HTML server-side
-    clean_prompt = bleach.clean(
-        body.prompt, tags=_PROMPT_TAGS, attributes={}, strip=True
-    )
-
-    # Auto-assign order_index if not specified
-    if body.order_index is None:
-        result = await db.execute(
-            select(Question.order_index)
-            .where(Question.game_id == game_id)
-            .order_by(Question.order_index.desc())
-            .limit(1)
-        )
-        max_idx = result.scalar_one_or_none()
-        order_index = (max_idx + 1) if max_idx is not None else 0
-    else:
-        order_index = body.order_index
-
-    question = Question(
-        game_id=game_id,
-        type=body.type,
-        grading_type=body.grading_type,
-        prompt=clean_prompt,
-        config=body.config,
-        answer_data=body.answer_data,
-        time_limit_seconds=body.time_limit_seconds,
-        points_value=body.points_value,
-        order_index=order_index,
-    )
-    db.add(question)
-    await db.flush()
-    await db.refresh(question)
+    question = await question_service.create_question(db, game, body)
     await db.commit()
     return question
 
@@ -372,25 +334,7 @@ async def update_question(
     if not question:
         raise NotFoundError(f"Question {question_id} not found in game {game_id}")
 
-    if body.type is not None:
-        question.type = body.type
-    if body.grading_type is not None:
-        question.grading_type = body.grading_type
-    if body.prompt is not None:
-        question.prompt = bleach.clean(
-            body.prompt, tags=_PROMPT_TAGS, attributes={}, strip=True
-        )
-    if body.config is not None:
-        question.config = body.config
-    if body.answer_data is not None:
-        question.answer_data = body.answer_data
-    if body.time_limit_seconds is not None:
-        question.time_limit_seconds = body.time_limit_seconds
-    if body.points_value is not None:
-        question.points_value = body.points_value
-    if body.order_index is not None:
-        question.order_index = body.order_index
-    return question
+    return await question_service.update_question(db, question, body)
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)
@@ -406,7 +350,7 @@ async def delete_question(
     question = result.scalar_one_or_none()
     if not question:
         raise NotFoundError(f"Question {question_id} not found in game {game_id}")
-    await db.delete(question)
+    await question_service.delete_question(db, question)
 
 
 @router.post("/games/{game_id}/questions/reorder", status_code=204)
@@ -420,16 +364,7 @@ async def reorder_questions(
     if not game:
         raise NotFoundError(f"Game {game_id} not found")
 
-    result = await db.execute(select(Question).where(Question.game_id == game_id))
-    questions = {q.id: q for q in result.scalars().all()}
-
-    if set(body.order) != set(questions.keys()):
-        raise ConflictError(
-            "order list must contain exactly the IDs of all questions in this game"
-        )
-
-    for idx, qid in enumerate(body.order):
-        questions[qid].order_index = idx
+    await question_service.reorder_questions(db, game, body.order)
 
 
 @router.get("/games/{game_id}/export")
@@ -529,9 +464,7 @@ async def import_game(
     await db.flush()
 
     for idx, q in enumerate(validated_questions):
-        clean_prompt = bleach.clean(
-            q.prompt, tags=_PROMPT_TAGS, attributes={}, strip=True
-        )
+        clean_prompt = question_service.sanitize_prompt(q.prompt)
         db.add(
             Question(
                 game_id=game.id,
