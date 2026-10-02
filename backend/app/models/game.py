@@ -5,12 +5,12 @@ from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Enum,
     ForeignKey,
     Integer,
-    JSON,
     String,
     Text,
     func,
