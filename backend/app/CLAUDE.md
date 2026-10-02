@@ -18,12 +18,12 @@ Top-level files:
   handler returns, rolls back on exception).
 - `redis_client.py` — Lazy process-wide `get_redis()` (`decode_responses=True`) and
   `close_redis()`.
-- `migrations/` — Alembic (versions 001–003). Not covered by a context file.
+- `migrations/` — Alembic (versions 001–004). Not covered by a context file.
 
 Subdirectories (each has its own `CLAUDE.md`, so read it before working there):
 | dir | role |
 |---|---|
-| `models/` | SQLAlchemy tables. Games are **not** linked to courses; they meet only in `GameSession`. |
+| `models/` | SQLAlchemy tables. A game belongs to at most one course (`Game.course_id`, nullable); each `GameSession` keeps the course it was played in, which can differ. |
 | `schemas/` | Pydantic request/response shapes and per-question-type structure validation. |
 | `common/` | Auth dependencies (global role only), exception types, logging, rate limiter. |
 | `services/` | Business logic: access checks, room lifecycle, scoring, Redis state, roster, exports. |
