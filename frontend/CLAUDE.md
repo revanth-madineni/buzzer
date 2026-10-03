@@ -3,7 +3,8 @@
 ## Purpose
 The three browser clients for Buzzer, each a separate React 18 + Vite 5 + Tailwind 3 +
 TypeScript single-page app:
-- **`host/`**: the instructor's projector screen, which creates and drives a game.
+- **`host/`**: the instructor's projector screen, which creates and drives a game, plus a
+  per-course management area (games, questions, roster, session results) for course HOSTs.
 - **`player/`**: students' phones, to join a room and answer.
 - **`admin/`**: the staff desktop console for courses, rosters, users, games, questions,
   access grants, and session exports.
@@ -47,30 +48,35 @@ enforces either; every check is server-side (`backend/app/common/CLAUDE.md`,
 `routers/CLAUDE.md`, `services/CLAUDE.md`, `websocket/CLAUDE.md`).
 - **Global `User.role`** (`ADMIN | USER | GUEST`):
   - Admin endpoints (`/api/admin/*`) need `ADMIN`.
-  - Host endpoints (`/api/game/my-*`, `POST /game/rooms`, session tools) need `ADMIN` or
-    `USER`.
+  - Host endpoints (`/api/game/my-*`, `POST /game/rooms`, session tools, and the course-host
+    management API `/api/host/*`) need `ADMIN` or `USER`, plus the course checks below.
   - GUESTs can only join as players.
-- **Per-course `UserCourseAccess.role`** (`HOST | PLAYER`) plus **per-game `UserGameAccess`**.
+- **Per-course `UserCourseAccess.role`** (`HOST | PLAYER`) plus **per-game `UserGameAccess`**
+  grants, which only matter for games an admin has marked `restricted`.
 
 | app | writes | reads (via backend checks) |
 |---|---|---|
-| admin | global role (USER↔ADMIN), course HOST/PLAYER grants, game grants, course rosters | — (everything is `require_admin`) |
-| host | game sessions (`POST /game/rooms`) | course HOST **and** game grant to create a room (ADMIN bypasses). Only session ownership (`host_user_id`) or ADMIN to rejoin/delete/drive it later. |
+| admin | global role (USER↔ADMIN), course HOST/PLAYER grants, game grants, `restricted`, game ↔ course assignment, `allow_guests`, course rosters | — (everything is `require_admin`) |
+| host | game sessions (`POST /game/rooms`); for courses they HOST: games, questions, roster uploads | HOST on the **game's** course (+ a grant if the game is restricted) to run or edit it (ADMIN bypasses). Session results: HOST on the session's course. Rejoin/delete/drive a live session: ownership (`host_user_id`) or ADMIN. |
 | player | GUEST users (`/auth/guest`), scores (via socket) | active roster row **or** course PLAYER/HOST grant to join (ADMIN and GUEST join any room) |
 
-**Games have no course.** A game is a reusable question bank; the course is chosen when the host
-creates a room, and the two only meet on `GameSession`. To let an instructor run game G in
-course C, an admin grants HOST on C **and** access to G, separately.
+**Games belong to a course** (T4). Every HOST of course C can create, edit and run C's games.
+An admin can mark a game `restricted`, and then a host also needs a per-game grant. A room can
+only be created in the game's own course. To let an instructor run games in C, an admin grants
+them HOST on C (admin app → Access).
 
 ### One game, end to end
-1. **Admin setup:** course, roster CSV, game + questions, instructor's HOST + game grants.
+1. **Admin setup:** course and the instructor's HOST grant (admin Access page). The instructor
+   can then upload the roster and create games + questions in the host app's management area,
+   or the admin does it in the admin app.
 2. **Host creates a room:** sign in (NetID SSO or local account), pick course + game, get a
    6-char code and a QR pointing to `/player/join?code=…`.
 3. **Players join:** ping the code, get a token (guest, NetID, or local account), socket
    `join_room`.
 4. **The host drives each question:** `host_advance` / `host_lock_question`. Server events fan
    out, with distributions + anonymous scores to the host and personal results to each player.
-5. **After the game,** the admin exports Canvas CSV or the HTML report from `SessionsPage`.
+5. **After the game,** any HOST of the course downloads the score CSV or HTML summary from the
+   host app's Sessions page; the admin can also export Canvas CSV from the admin `SessionsPage`.
 
 ## Gotchas
 Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
@@ -82,19 +88,22 @@ Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
   In Vite dev (separate ports = separate origins) this **doesn't** happen, so it only shows up
   under nginx.
 - **No client-side role gates anywhere.** Each `App.tsx` guard only checks that a token exists.
-  Wrong-role users get into the UI and hit 403s, which show as a bare `HTTP 403`.
-- **The same `detail`-vs-`message` bug in all three `lib/api.ts`.** The backend's `BuzzerError`
-  sends `{error, message}`, but every wrapper reads `detail`, so most server error messages
-  never reach the user.
+  Wrong-role users get into the UI and hit 403s. Host and admin show the server's message; the
+  player app shows a bare `HTTP 403`.
+- **Error messages: fixed in host and admin, not in player.** The backend's `BuzzerError` sends
+  `{error, message}`. The host and admin `lib/api.ts` read `message`, then a string `detail`,
+  then "Invalid input" for validation arrays (T4). The player wrapper still reads only `detail`.
 - **No token refresh in any app.** The 2 h access token is never renewed, even though a 7-day
   refresh cookie is set.
-- **Copy-pasted code instead of a shared package.** `lib/api.ts` (five variants of the same
-  error handling across the three apps), `lib/utils.ts`, and `components/ui/*` are duplicated:
-  host ≡ admin byte-for-byte, and player is re-tuned for touch. Socket payload types in
+- **Copy-pasted code instead of a shared package.** `lib/api.ts`, `lib/utils.ts`, and
+  `components/ui/*` are duplicated. Host ≡ admin byte-for-byte (including `api.ts` since T4);
+  the player's `api.ts` is older, and its `ui/*` are re-tuned for touch. Socket payload types in
   `host/src/types/` and `player/src/types/` are hand-written, already drift from the server, and
   hard-code event names from `backend/app/websocket/events.py`. A fix or a new question type
   must be applied per app.
-- **Adding a question type** touches the admin `QuestionEditorPage` (form + `answer_data` keys,
+- **Two question editors.** The host `pages/manage/QuestionEditorPage.tsx` is an adapted copy of
+  the admin one (host endpoints, no JSON export). A form change must be made in both.
+- **Adding a question type** touches both `QuestionEditorPage`s (form + `answer_data` keys,
   which mix `answer_points` with fill-in-the-blank's camelCase), the host `QuestionPage` /
   `ResultsPage` / `GameOverPage`, the player `QuestionPage` / `ResultsPage` / `GameOverPage`,
   both `types/game.ts`, and the backend scoring and reveal code.

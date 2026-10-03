@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.course import CourseRoster
 from ..schemas.admin import RosterUploadResult
+from ..schemas.host import RosterUploadMode
 
 logger = structlog.get_logger()
 
@@ -50,11 +51,15 @@ def _parse_sis_login(raw: str) -> tuple[str, str]:
 
 
 async def process_roster_csv(
-    db: AsyncSession, course_id: int, file_bytes: bytes
+    db: AsyncSession,
+    course_id: int,
+    file_bytes: bytes,
+    mode: RosterUploadMode = "replace",
 ) -> RosterUploadResult:
     """
-    Parse a Canvas gradebook CSV export, upsert rows into course_rosters,
-    and deactivate entries whose netid is absent from this upload.
+    Parse a Canvas gradebook CSV export and upsert rows into course_rosters.
+    mode="replace" also deactivates entries whose netid is absent from this
+    upload; mode="add_update" never deactivates.
 
     Expected columns (case-insensitive):
       'Student'      — "Last, First [Middle]"
@@ -166,19 +171,7 @@ async def process_roster_csv(
 
     await db.flush()
 
-    # Deactivate entries not present in this upload
-    deactivated = 0
-    if seen_netids:
-        result = await db.execute(
-            select(CourseRoster).where(
-                CourseRoster.course_id == course_id,
-                CourseRoster.netid.not_in(seen_netids),
-                CourseRoster.is_active == True,  # noqa: E712
-            )
-        )
-        for entry in result.scalars().all():
-            entry.is_active = False
-            deactivated += 1
+    deactivated = await _deactivate_missing(db, course_id, seen_netids, mode)
 
     logger.info(
         "roster_uploaded",
@@ -201,11 +194,12 @@ async def process_roster_rows(
     db: AsyncSession,
     course_id: int,
     rows: list[dict[str, str]],
+    mode: RosterUploadMode = "replace",
 ) -> RosterUploadResult:
     """
     Process pre-mapped roster rows (already resolved to netid/full_name/email
-    by the frontend column-mapping wizard).  Upserts into course_rosters and
-    deactivates entries whose netid was absent from this upload.
+    by the frontend column-mapping wizard).  Upserts into course_rosters;
+    mode="replace" also deactivates entries whose netid was absent.
     """
     imported = updated = 0
     errors: list[str] = []
@@ -255,18 +249,7 @@ async def process_roster_rows(
 
     await db.flush()
 
-    deactivated = 0
-    if seen_netids:
-        result = await db.execute(
-            select(CourseRoster).where(
-                CourseRoster.course_id == course_id,
-                CourseRoster.netid.not_in(seen_netids),
-                CourseRoster.is_active == True,  # noqa: E712
-            )
-        )
-        for entry in result.scalars().all():
-            entry.is_active = False
-            deactivated += 1
+    deactivated = await _deactivate_missing(db, course_id, seen_netids, mode)
 
     logger.info(
         "roster_imported_rows",
@@ -283,3 +266,32 @@ async def process_roster_rows(
         deactivated=deactivated,
         errors=errors,
     )
+
+
+async def _deactivate_missing(
+    db: AsyncSession,
+    course_id: int,
+    seen_netids: set[str],
+    mode: RosterUploadMode,
+) -> int:
+    """
+    In replace mode, deactivate active entries whose netid is not in this upload.
+
+    The `seen_netids` guard is what keeps an upload with zero valid rows (every
+    row errored, or only the "Points Possible" row) from deactivating the whole
+    roster. Keep it (spec §4.5).
+    """
+    if mode != "replace" or not seen_netids:
+        return 0
+    result = await db.execute(
+        select(CourseRoster).where(
+            CourseRoster.course_id == course_id,
+            CourseRoster.netid.not_in(seen_netids),
+            CourseRoster.is_active.is_(True),
+        )
+    )
+    deactivated = 0
+    for entry in result.scalars().all():
+        entry.is_active = False
+        deactivated += 1
+    return deactivated

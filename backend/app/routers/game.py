@@ -13,7 +13,7 @@ from ..common.exceptions import NotFoundError
 from ..config import settings
 from ..database import get_db
 from ..models.course import Course, UserCourseAccess
-from ..models.game import Game, Question, UserGameAccess
+from ..models.game import Game, Question
 from ..models.session import GameSession
 from ..models.user import User
 from ..redis_client import get_redis
@@ -25,6 +25,7 @@ from ..schemas.game import (
     RoomCreateResponse,
     RoomInfoResponse,
 )
+from ..services import access_service as access
 from ..services import game_service
 from ..services import state_service as state
 
@@ -77,18 +78,10 @@ async def my_games(
 ) -> list[Game]:
     """
     Returns games the authenticated user can run.
-    ADMIN sees all games; USER sees games from user_game_access.
+    ADMIN sees all games; USER sees games of courses where they hold HOST,
+    excluding restricted games they have no grant on.
     """
-    if user.role == "ADMIN":
-        result = await db.execute(select(Game).order_by(Game.title))
-        return result.scalars().all()
-
-    result = await db.execute(
-        select(Game)
-        .join(UserGameAccess, UserGameAccess.game_id == Game.id)
-        .where(UserGameAccess.user_id == user.id)
-        .order_by(Game.title)
-    )
+    result = await db.execute(access.usable_games_stmt(user).order_by(Game.title))
     return result.scalars().all()
 
 

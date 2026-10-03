@@ -10,6 +10,7 @@ interface Course {
   id: number;
   name: string;
   semester: string;
+  allow_guests: boolean;
   created_at: string;
 }
 
@@ -20,6 +21,7 @@ export default function CoursesPage() {
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
   const [semester, setSemester] = useState('');
+  const [allowGuests, setAllowGuests] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editingCourse, setEditingCourse] = useState<Course | null>(null);
   const [editName, setEditName] = useState('');
@@ -44,15 +46,26 @@ export default function CoursesPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.post('/admin/courses', { name, semester });
+      await api.post('/admin/courses', { name, semester, allow_guests: allowGuests });
       setName('');
       setSemester('');
+      setAllowGuests(true);
       setShowForm(false);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create course');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function toggleGuests(c: Course) {
+    setError('');
+    try {
+      const updated = await api.put<Course>(`/admin/courses/${c.id}`, { allow_guests: !c.allow_guests });
+      setCourses((prev) => prev.map((x) => (x.id === c.id ? updated : x)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update course');
     }
   }
 
@@ -112,6 +125,14 @@ export default function CoursesPage() {
                 className="flex-1 min-w-48"
                 required
               />
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={allowGuests}
+                  onChange={(e) => setAllowGuests(e.target.checked)}
+                />
+                Allow guest players
+              </label>
               <Button type="submit" disabled={saving}>{saving ? 'Creating…' : 'Create'}</Button>
               <Button type="button" variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
             </form>
@@ -157,7 +178,14 @@ export default function CoursesPage() {
                 <p className="font-semibold text-slate-100">{c.name}</p>
                 <p className="text-slate-400 text-sm">{c.semester}</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                <label
+                  className="flex items-center gap-2 text-sm text-slate-300 mr-2"
+                  title="Guests join with just a name and email, without a roster entry"
+                >
+                  <input type="checkbox" checked={c.allow_guests} onChange={() => void toggleGuests(c)} />
+                  Guests allowed
+                </label>
                 <Button
                   variant="outline"
                   size="sm"

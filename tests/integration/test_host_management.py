@@ -1,0 +1,611 @@
+"""
+T4 management tests (spec §4.14): questions and rosters through the shared
+services (question_service, roster_service). Admin paths must behave exactly as
+before the extraction; host paths are added with the host router.
+"""
+
+from __future__ import annotations
+
+import json
+
+from . import t4_helpers
+from .t4_helpers import T4World, add_question, assert_error, play_game
+
+t4 = t4_helpers.t4  # fixture
+
+MC_QUESTION = {
+    "type": "multiple_choice",
+    "grading_type": "ACCURACY",
+    "config": {"options": ["A", "B"]},
+    "answer_data": {"answer_points": [1, 0]},
+    "points_value": 1,
+}
+
+
+def question_ids(t4: T4World, prefix: str, game_id: int, token: str | None = None):
+    r = t4.request("GET", f"{prefix}/games/{game_id}/questions", token)
+    assert r.status_code == 200, r.text
+    return [q["id"] for q in r.json()]
+
+
+# ---------------------------------------------------------------------------
+# Questions
+# ---------------------------------------------------------------------------
+
+
+def test_admin_question_round_trip_and_sanitizing(t4: T4World):
+    game = t4.game()
+    base = f"/admin/games/{game}/questions"
+
+    r = t4.request(
+        "POST",
+        base,
+        json={**MC_QUESTION, "prompt": "<script>alert(1)</script><b>Bold</b> one"},
+    )
+    assert r.status_code == 201, r.text
+    q1 = r.json()
+    assert "<script" not in q1["prompt"]
+    assert "<b>Bold</b> one" in q1["prompt"]
+    assert q1["order_index"] == 0
+
+    r = t4.request("POST", base, json={**MC_QUESTION, "prompt": "two"})
+    assert r.status_code == 201, r.text
+    q2 = r.json()
+    assert q2["order_index"] == 1
+
+    # Partial update: only sent, non-null fields change; prompt is sanitized.
+    r = t4.request(
+        "PUT",
+        f"{base}/{q1['id']}",
+        json={"prompt": '<img src=x onerror="alert(1)">safe', "points_value": 5},
+    )
+    assert r.status_code == 200, r.text
+    updated = r.json()
+    assert updated["prompt"] == "safe"
+    assert updated["points_value"] == 5
+    assert updated["config"] == MC_QUESTION["config"]
+
+    r = t4.request("POST", f"{base}/reorder", json={"order": [q2["id"], q1["id"]]})
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/admin", game) == [q2["id"], q1["id"]]
+
+    # Invalid reorder keeps today's generic 409 CONFLICT (INVALID_ORDER is [Extra]).
+    r = t4.request("POST", f"{base}/reorder", json={"order": [q2["id"]]})
+    assert_error(r, 409, "CONFLICT")
+    assert question_ids(t4, "/admin", game) == [q2["id"], q1["id"]]
+
+    r = t4.request("DELETE", f"{base}/{q1['id']}")
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/admin", game) == [q2["id"]]
+
+
+def test_admin_question_in_another_game_is_not_found(t4: T4World):
+    game_a, game_b = t4.game(), t4.game()
+    r = t4.request(
+        "POST", f"/admin/games/{game_a}/questions", json={**MC_QUESTION, "prompt": "q"}
+    )
+    assert r.status_code == 201, r.text
+    qid = r.json()["id"]
+
+    r = t4.request(
+        "PUT", f"/admin/games/{game_b}/questions/{qid}", json={"prompt": "x"}
+    )
+    assert_error(r, 404, "NOT_FOUND")
+    r = t4.request("DELETE", f"/admin/games/{game_b}/questions/{qid}")
+    assert_error(r, 404, "NOT_FOUND")
+
+
+# ---------------------------------------------------------------------------
+# Roster (admin upload is mode=replace)
+# ---------------------------------------------------------------------------
+
+
+def gradebook_csv(netids: list[str], extra_rows: str = "") -> bytes:
+    lines = ["Student,ID,SIS User ID,SIS Login ID,Section"]
+    lines.append("Points Possible,,,,")
+    for i, netid in enumerate(netids):
+        lines.append(f'"Last{i}, First{i}",{i},{i},{netid}@wisc.edu,S1')
+    return ("\n".join(lines) + "\n" + extra_rows).encode()
+
+
+def upload(t4: T4World, course_id: int, content: bytes):
+    return t4.request(
+        "POST",
+        f"/admin/courses/{course_id}/roster",
+        files={"file": ("roster.csv", content, "text/csv")},
+    )
+
+
+def roster_state(t4: T4World, course_id: int) -> dict[str, bool]:
+    r = t4.request("GET", f"/admin/courses/{course_id}/roster")
+    assert r.status_code == 200, r.text
+    return {e["netid"]: e["is_active"] for e in r.json()}
+
+
+def test_admin_roster_replace_deactivates_missing_entries(t4: T4World):
+    course = t4.course()
+    n = [f"t4n{t4.tag}{i}" for i in range(3)]
+
+    r = upload(t4, course, gradebook_csv(n))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"imported": 3, "updated": 0, "deactivated": 0, "errors": []}
+
+    r = upload(t4, course, gradebook_csv(n[:2]))
+    assert r.status_code == 200, r.text
+    assert r.json()["deactivated"] == 1
+    assert roster_state(t4, course) == {n[0]: True, n[1]: True, n[2]: False}
+
+    # Re-listing a deactivated entry reactivates it.
+    r = upload(t4, course, gradebook_csv(n))
+    assert r.status_code == 200, r.text
+    assert roster_state(t4, course) == {n[0]: True, n[1]: True, n[2]: True}
+
+
+def test_admin_roster_upload_with_no_valid_rows_changes_nothing(t4: T4World):
+    """The `if seen_netids` guard (spec §4.5): no valid rows must not wipe the roster."""
+    course = t4.course()
+    n = [f"t4n{t4.tag}{i}" for i in range(2)]
+    assert upload(t4, course, gradebook_csv(n)).status_code == 200
+    before = roster_state(t4, course)
+
+    only_bad_rows = gradebook_csv([], extra_rows='"Nobody, Here",9,9,,S1\n')
+    only_points_possible = gradebook_csv([])
+    for content in (only_bad_rows, only_points_possible):
+        r = upload(t4, course, content)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert (body["imported"], body["updated"], body["deactivated"]) == (0, 0, 0)
+        assert roster_state(t4, course) == before
+    assert body["errors"] == []  # Points Possible alone is skipped, not an error
+    assert upload(t4, course, only_bad_rows).json()["errors"]
+
+
+def test_admin_roster_without_required_columns_changes_nothing(t4: T4World):
+    course = t4.course()
+    n = [f"t4n{t4.tag}{i}" for i in range(2)]
+    assert upload(t4, course, gradebook_csv(n)).status_code == 200
+    before = roster_state(t4, course)
+
+    r = upload(t4, course, b"Name,Email\nSomeone,someone@wisc.edu\n")
+    assert r.status_code == 200, r.text
+    assert r.json()["errors"][0].startswith("Missing required columns")
+    assert roster_state(t4, course) == before
+
+
+# ---------------------------------------------------------------------------
+# Admin: courses (allow_guests) and game import (course_id form field)
+# ---------------------------------------------------------------------------
+
+
+def test_admin_course_allow_guests(t4: T4World):
+    course = t4.course()
+    r = t4.request("GET", f"/admin/courses/{course}")
+    assert r.status_code == 200, r.text
+    assert r.json()["allow_guests"] is True
+
+    r = t4.request("PUT", f"/admin/courses/{course}", json={"allow_guests": False})
+    assert r.status_code == 200, r.text
+    assert t4.request("GET", f"/admin/courses/{course}").json()["allow_guests"] is False
+
+    r = t4.request(
+        "POST",
+        "/admin/courses",
+        json={"name": f"T4 Course {t4.tag}ng", "semester": "T4", "allow_guests": False},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["allow_guests"] is False
+
+
+def bundle(game: dict) -> bytes:
+    return json.dumps(
+        {
+            "format": "buzzer/game",
+            "version": 1,
+            "game": game,
+            "questions": [
+                {**MC_QUESTION, "prompt": "<script>x</script>imported"},
+            ],
+        }
+    ).encode()
+
+
+def import_game(t4: T4World, content: bytes, course_id: int | None = None):
+    data = {} if course_id is None else {"course_id": str(course_id)}
+    return t4.request(
+        "POST",
+        "/admin/games/import",
+        files={"file": ("game.json", content, "application/json")},
+        data=data,
+    )
+
+
+def test_admin_import_attaches_course_from_form_field(t4: T4World):
+    course = t4.course()
+    r = import_game(t4, bundle({"title": f"T4 Import {t4.tag}"}), course)
+    assert r.status_code == 201, r.text
+    game = r.json()["game_id"]
+    t4.track_game(game)
+    assert t4.get_game(game)["course_id"] == course
+    prompts = [
+        q["prompt"] for q in t4.request("GET", f"/admin/games/{game}/questions").json()
+    ]
+    assert prompts == ["ximported"]
+
+    r = import_game(t4, bundle({"title": f"T4 Import {t4.tag}b"}))
+    assert r.status_code == 201, r.text
+    t4.track_game(r.json()["game_id"])
+    assert t4.get_game(r.json()["game_id"])["course_id"] is None
+
+
+def test_admin_import_rejects_unknown_course_and_bundle_course_id(t4: T4World):
+    def titles() -> set[str]:
+        return {g["title"] for g in t4.request("GET", "/admin/games").json()}
+
+    title = f"T4 Import {t4.tag}x"
+    assert_error(
+        import_game(t4, bundle({"title": title}), 2_000_000_000), 404, "NOT_FOUND"
+    )
+    r = import_game(t4, bundle({"title": title, "course_id": t4.course()}))
+    assert r.status_code == 422, r.text
+    assert title not in titles()
+
+
+# ---------------------------------------------------------------------------
+# Host: games and questions
+# ---------------------------------------------------------------------------
+
+
+def host_of(t4: T4World, course_id: int):
+    host = t4.user()
+    t4.grant_course(host, course_id)
+    return host
+
+
+def test_host_creates_game_in_path_course(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+
+    r = t4.request(
+        "POST",
+        f"/host/courses/{course}/games",
+        host.token,
+        json={"title": f"T4 Host Game {t4.tag}", "description": "d"},
+    )
+    assert r.status_code == 201, r.text
+    game = r.json()
+    t4.track_game(game["id"])
+    assert game["course_id"] == course
+    assert game["restricted"] is False
+    assert t4.get_game(game["id"])["course_id"] == course
+
+    # Hosts cannot choose the course or restrict through the body.
+    r = t4.request(
+        "POST",
+        f"/host/courses/{course}/games",
+        host.token,
+        json={"title": "x", "course_id": course},
+    )
+    assert_error(r, 422, "VALIDATION_ERROR")
+    r = t4.request(
+        "PUT", f"/host/games/{game['id']}", host.token, json={"restricted": True}
+    )
+    assert_error(r, 422, "VALIDATION_ERROR")
+    assert t4.get_game(game["id"])["restricted"] is False
+
+    # The game is usable by its creator right away.
+    assert game["id"] in t4.my_game_ids(host.token)
+    assert t4.create_room(game["id"], course, host.token).status_code == 201
+
+
+def test_host_question_crud_reorder_and_count(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    game = t4.game(course)
+    base = f"/host/games/{game}/questions"
+
+    r = t4.request(
+        "POST",
+        base,
+        host.token,
+        json={**MC_QUESTION, "prompt": "<script>alert(1)</script><i>one</i>"},
+    )
+    assert r.status_code == 201, r.text
+    q1 = r.json()
+    assert q1["prompt"] == "alert(1)<i>one</i>"
+    assert q1["answer_data"] == MC_QUESTION["answer_data"]  # hosts edit scoring
+
+    r = t4.request("POST", base, host.token, json={**MC_QUESTION, "prompt": "two"})
+    assert r.status_code == 201, r.text
+    q2 = r.json()
+
+    r = t4.request(
+        "PUT",
+        f"{base}/{q1['id']}",
+        host.token,
+        json={
+            "prompt": "<script>x</script>edited",
+            "answer_data": {"answer_points": [0, 1]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["prompt"] == "xedited"
+    assert r.json()["answer_data"] == {"answer_points": [0, 1]}
+
+    r = t4.request(
+        "POST", f"{base}/reorder", host.token, json={"order": [q2["id"], q1["id"]]}
+    )
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/host", game, host.token) == [q2["id"], q1["id"]]
+
+    r = t4.request("GET", f"/host/courses/{course}/games", host.token)
+    assert {g["id"]: g["question_count"] for g in r.json()} == {game: 2}
+
+    r = t4.request("DELETE", f"{base}/{q1['id']}", host.token)
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/host", game, host.token) == [q2["id"]]
+
+
+def test_host_question_from_another_game_is_not_found(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    game_a, game_b = t4.game(course), t4.game(course)
+    r = t4.request(
+        "POST",
+        f"/host/games/{game_a}/questions",
+        host.token,
+        json={**MC_QUESTION, "prompt": "q"},
+    )
+    qid = r.json()["id"]
+
+    for method, body in (("PUT", {"prompt": "x"}), ("DELETE", None)):
+        r = t4.request(
+            method, f"/host/games/{game_b}/questions/{qid}", host.token, json=body
+        )
+        assert_error(r, 404, "NOT_FOUND")
+    assert question_ids(t4, "/host", game_a, host.token) == [qid]
+
+
+# ---------------------------------------------------------------------------
+# Host: roster (Canvas gradebook CSV only; default mode add_update)
+# ---------------------------------------------------------------------------
+
+
+def host_upload(
+    t4: T4World, course_id: int, token: str, content: bytes, mode: str | None = None
+):
+    return t4.request(
+        "POST",
+        f"/host/courses/{course_id}/roster",
+        token,
+        files={"file": ("roster.csv", content, "text/csv")},
+        data={} if mode is None else {"mode": mode},
+    )
+
+
+def test_host_roster_add_update_never_deactivates(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    n = [f"t4n{t4.tag}{i}" for i in range(3)]
+
+    r = host_upload(t4, course, host.token, gradebook_csv(n))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"imported": 3, "updated": 0, "deactivated": 0, "errors": []}
+
+    r = host_upload(t4, course, host.token, gradebook_csv(n[:1]))  # default mode
+    assert r.status_code == 200, r.text
+    assert r.json()["deactivated"] == 0
+    assert roster_state(t4, course) == {n[0]: True, n[1]: True, n[2]: True}
+
+    # add_update reactivates a listed inactive entry.
+    assert upload(t4, course, gradebook_csv(n[:2])).json()["deactivated"] == 1
+    r = host_upload(t4, course, host.token, gradebook_csv([n[2]]), "add_update")
+    assert r.json()["updated"] == 1
+    assert roster_state(t4, course) == {n[0]: True, n[1]: True, n[2]: True}
+
+    r = t4.request("GET", f"/host/courses/{course}/roster", host.token)
+    assert r.status_code == 200, r.text
+    assert {e["netid"] for e in r.json()} == set(n)
+
+
+def test_host_roster_replace(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    player = t4.user("t4_player")
+    t4.grant_course(player, course, "PLAYER")
+    n = [f"t4n{t4.tag}{i}" for i in range(3)]
+    assert host_upload(t4, course, host.token, gradebook_csv(n)).status_code == 200
+
+    r = host_upload(t4, course, host.token, gradebook_csv(n[1:]), "replace")
+    assert r.status_code == 200, r.text
+    assert r.json()["deactivated"] == 1
+    assert roster_state(t4, course) == {n[0]: False, n[1]: True, n[2]: True}
+
+    # Inactive entries are listed for hosts too.
+    r = t4.request("GET", f"/host/courses/{course}/roster", host.token)
+    assert {e["netid"]: e["is_active"] for e in r.json()} == roster_state(t4, course)
+
+    # Roster uploads never touch PLAYER/HOST grants.
+    r = t4.request("GET", f"/admin/courses/{course}/access")
+    assert {e["user_id"]: e["role"] for e in r.json()} == {
+        host.id: "HOST",
+        player.id: "PLAYER",
+    }
+
+
+def test_host_roster_no_valid_rows_or_missing_columns_change_nothing(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    n = [f"t4n{t4.tag}{i}" for i in range(2)]
+    assert host_upload(t4, course, host.token, gradebook_csv(n)).status_code == 200
+    before = roster_state(t4, course)
+
+    only_bad_rows = gradebook_csv([], extra_rows='"Nobody, Here",9,9,,S1\n')
+    r = host_upload(t4, course, host.token, only_bad_rows, "replace")
+    assert r.status_code == 200, r.text
+    assert r.json()["deactivated"] == 0 and r.json()["errors"]
+    assert roster_state(t4, course) == before
+
+    r = host_upload(t4, course, host.token, b"Name,Email\nA,a@wisc.edu\n", "replace")
+    assert r.status_code == 200, r.text
+    assert r.json()["errors"][0].startswith("Missing required columns")
+    assert roster_state(t4, course) == before
+
+
+def test_host_roster_access_and_mode_validation(t4: T4World):
+    course_a, course_b = t4.course(), t4.course()
+    host_b = host_of(t4, course_b)
+    player = t4.user("t4_player")
+    t4.grant_course(player, course_a, "PLAYER")
+    content = gradebook_csv([f"t4n{t4.tag}0"])
+
+    for token in (host_b.token, player.token, t4.user().token):
+        assert_error(
+            t4.request("GET", f"/host/courses/{course_a}/roster", token),
+            403,
+            "FORBIDDEN",
+        )
+        assert_error(host_upload(t4, course_a, token, content), 403, "FORBIDDEN")
+    assert roster_state(t4, course_a) == {}
+
+    host_a = host_of(t4, course_a)
+    assert_error(
+        host_upload(t4, course_a, host_a.token, content, "wipe"),
+        422,
+        "VALIDATION_ERROR",
+    )
+    assert roster_state(t4, course_a) == {}
+
+
+# ---------------------------------------------------------------------------
+# Host: game delete (never deletes recorded results)
+# ---------------------------------------------------------------------------
+
+
+async def test_host_cannot_delete_game_with_results(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    completed_game, in_progress_game = t4.game(course), t4.game(course)
+    for g in (completed_game, in_progress_game):
+        add_question(t4, g)
+    done = await play_game(t4, completed_game, course, host.token, choices=[0])
+    partial = await play_game(
+        t4, in_progress_game, course, host.token, choices=[0], finish=False
+    )
+
+    for game, played, status in (
+        (completed_game, done, "COMPLETED"),
+        (in_progress_game, partial, "IN_PROGRESS"),
+    ):
+        r = t4.request("DELETE", f"/host/games/{game}", host.token)
+        assert_error(r, 409, "GAME_HAS_RESULTS")
+        assert t4.get_game(game)["id"] == game
+        session = t4.admin_session(played.session_id)
+        assert session is not None and session["status"] == status
+        assert session["player_count"] == 1
+        assert len(t4.request("GET", f"/admin/games/{game}/questions").json()) == 1
+
+
+def test_host_deletes_game_with_only_scoreless_lobby_session(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    game = t4.game(course, restricted=True)
+    t4.grant_game(host, game)
+    add_question(t4, game)
+    room = t4.create_room(game, course, host.token).json()
+    assert t4.request("GET", f"/game/rooms/{room['room_code']}/ping").status_code == 200
+
+    other = host_of(t4, t4.course())
+    assert_error(
+        t4.request("DELETE", f"/host/games/{game}", other.token), 403, "FORBIDDEN"
+    )
+
+    r = t4.request("DELETE", f"/host/games/{game}", host.token)
+    assert r.status_code == 204, r.text
+    assert_error(t4.request("GET", f"/admin/games/{game}"), 404, "NOT_FOUND")
+    assert t4.admin_session(room["session_id"]) is None
+    assert_error(
+        t4.request("GET", f"/game/rooms/{room['room_code']}/ping"), 404, "NOT_FOUND"
+    )
+    r = t4.request("GET", f"/admin/users/{host.id}")
+    assert game not in r.json()["game_access"]
+
+
+async def test_question_with_answers_cannot_be_deleted(t4: T4World):
+    course = t4.course()
+    host = host_of(t4, course)
+    game = t4.game(course)
+    answered = add_question(t4, game)
+    await play_game(t4, game, course, host.token, choices=[0])
+    unanswered = add_question(t4, game)  # added after the game
+
+    for path, token in (
+        (f"/host/games/{game}/questions/{answered}", host.token),
+        (f"/admin/games/{game}/questions/{answered}", None),
+    ):
+        assert_error(t4.request("DELETE", path, token), 409, "QUESTION_HAS_ANSWERS")
+    assert question_ids(t4, "/admin", game) == [answered, unanswered]
+
+    r = t4.request("DELETE", f"/host/games/{game}/questions/{unanswered}", host.token)
+    assert r.status_code == 204, r.text
+    assert question_ids(t4, "/admin", game) == [answered]
+
+
+# ---------------------------------------------------------------------------
+# Live games cannot be edited or deleted (GAME_LIVE, spec §4.5)
+# ---------------------------------------------------------------------------
+
+
+async def test_live_game_blocks_every_guarded_write(t4: T4World):
+    course, other_course = t4.course(), t4.course()
+    host = host_of(t4, course)
+    game = t4.game(course)
+    q1, q2 = add_question(t4, game), add_question(t4, game)
+    # Started, no players, sockets gone: IN_PROGRESS with a live Redis room.
+    live = await play_game(t4, game, course, host.token, choices=[], finish=False)
+    assert t4.admin_session(live.session_id)["status"] == "IN_PROGRESS"
+
+    def snapshot():
+        qs = t4.request("GET", f"/admin/games/{game}/questions").json()
+        return t4.get_game(game), [(q["id"], q["prompt"]) for q in qs]
+
+    before = snapshot()
+    new_q = {**MC_QUESTION, "prompt": "new"}
+    writes = [
+        ("PUT", f"/host/games/{game}", host.token, {"title": "x"}),
+        ("POST", f"/host/games/{game}/questions", host.token, new_q),
+        ("PUT", f"/host/games/{game}/questions/{q1}", host.token, {"prompt": "x"}),
+        ("DELETE", f"/host/games/{game}/questions/{q2}", host.token, None),
+        (
+            "POST",
+            f"/host/games/{game}/questions/reorder",
+            host.token,
+            {"order": [q2, q1]},
+        ),
+        ("DELETE", f"/host/games/{game}", host.token, None),
+        ("POST", f"/admin/games/{game}/questions", None, new_q),
+        ("PUT", f"/admin/games/{game}/questions/{q1}", None, {"prompt": "x"}),
+        ("DELETE", f"/admin/games/{game}/questions/{q2}", None, None),
+        ("POST", f"/admin/games/{game}/questions/reorder", None, {"order": [q2, q1]}),
+        (
+            "POST",
+            f"/admin/games/{game}/move",
+            None,
+            {"course_id": other_course, "confirm": True},
+        ),
+    ]
+    for method, path, token, body in writes:
+        r = t4.request(method, path, token, json=body)
+        assert_error(r, 409, "GAME_LIVE")
+    assert snapshot() == before
+
+    # Once the session is gone, the same edits go through.
+    t4.delete_session(live.session_id)
+    r = t4.request(
+        "POST",
+        f"/host/games/{game}/questions/reorder",
+        host.token,
+        json={"order": [q2, q1]},
+    )
+    assert r.status_code == 204, r.text
+    r = t4.request("DELETE", f"/host/games/{game}", host.token)
+    assert r.status_code == 204, r.text

@@ -24,8 +24,7 @@ Branch names follow the repo's existing `<type>/<kebab-name>` convention (`docs/
 | Deliverable | Branch | Contents |
 |---|---|---|
 | This design doc (T3) | `docs/design-t4-ui-restructure` | This file only. Merged **before** any implementation branch is opened. |
-| T4 backend + its T5 tests | `feat/t4-host-admin-backend` | §4.1–§4.10, migration report script, backend tests (§4.14), backend context-doc updates (§4.15). |
-| T4 frontend | `feat/t4-host-admin-frontend` | §4.11–§4.12, frontend context-doc updates. Branched from `main` **after** the backend MR merges (it calls the new API). |
+| T4 (backend + frontend) and its T5 tests | `feat/t4-host-admin` | §4.1–§4.15: backend (§4.1–§4.10), migration report script, frontend (§4.11–§4.12), tests (§4.14), and all context-doc updates (§4.15). One branch, one MR. |
 | Unrelated bug fix | `fix/admin-rejoin-becomes-host` | See "Separate deliverable" at the end. Not part of T4. |
 
 ---
@@ -123,10 +122,12 @@ merge, §4.5), it must catch `pydantic.ValidationError` and re-raise
 | `INVALID_ORDER` | 422 | Reorder IDs are not exactly the game's question-ID set [Extra] | `"Order must list every question in this game exactly once"` |
 | `SESSION_NOT_COMPLETED` | 409 | Host export/report for a session whose status is not COMPLETED | `"Results are available once the session is completed"` |
 | `ROSTER_TOO_LARGE` | 422 | Roster upload with more than 1000 data rows [Extra] | `"Roster uploads are limited to 1000 rows"` |
-| `ROSTER_EMPTY` | 422 | `mode=replace` upload with zero valid rows (would deactivate everyone) | `"No valid roster rows found — nothing was changed"` |
 | `ROSTER_PREVIEW_REQUIRED` | 422 | Host commit with `mode=replace` and no `version` [Extra] | `"Preview the upload before replacing the roster"` |
 | `ROSTER_CHANGED` | 409 | Host commit with a `version` (any mode) that no longer matches [Extra] | `"The roster changed since your preview — preview again"` |
-| `INVALID_COURSE_ASSIGNMENT` | 422 | Move/assign with `course_id: null` | `"A game cannot be removed from its course"` |
+
+Moving or assigning a game with `course_id: null` has no custom code: `GameMoveRequest.course_id`
+is a required `int`, so Pydantic rejects it with the standard 422 `VALIDATION_ERROR`. A game
+cannot be removed from its course.
 
 Socket errors (event `error`, payload `{"message": str}`, emitted by `gateway._emit_error`):
 
@@ -151,16 +152,17 @@ state checks (409/422). Tests assert on `error` codes, not just status.
 - `GameResponse` (admin and host): existing fields + `course_id: int | null`, `restricted: bool`.
 - `HostGameListItem`: `GameResponse` + `question_count: int` = number of `Question` rows with that
   `game_id`, computed with one grouped `COUNT` query for the whole list (no per-game query).
-- `MyGameItem` (`GET /game/my-games`): existing fields + `course_id: int` (never null for
-  non-admins; admins may see null), `restricted: bool`.
+- `MyGameItem` (`GET /game/my-games`): existing fields + `course_id: int | null` (never
+  null for non-admins, who only see games of their HOST courses; admins see every game,
+  including courseless ones), `restricted: bool`.
 - `MyCourseItem` (`GET /game/my-courses`, unchanged): `id, name, semester, role`. ADMIN gets
   **every** course (`role` always `"HOST"`), ordered semester desc then name; USER gets courses
   where they hold HOST. The host app's course picker uses this list as-is.
 - `CourseResponse`: existing fields + `allow_guests: bool`.
 - `SessionListItem` (host sessions list): **same fields as the existing `AdminSessionItem`** —
   `session_id, room_code, status, game_id, game_title, course_id, course_name, course_semester,
-  host_display_name, created_at, completed_at, player_count`. Reuse that schema (rename or alias
-  it) rather than defining a second one. Sources, matching admin `list_sessions`
+  host_display_name, created_at, completed_at, player_count`. Reuse that schema rather than
+  defining a second one: `SessionListItem = AdminSessionItem` in `schemas/host.py`. Sources, matching admin `list_sessions`
   (`routers/admin.py`): `created_at` / `completed_at` are the `GameSession` columns (there is no
   `started_at`); `player_count` = `COUNT(DISTINCT SessionScore.user_id)` for the session, so a
   player who joined but never answered is not counted; `host_display_name` = host's
@@ -212,6 +214,11 @@ Session status values are the uppercase strings of the `session_status` enum (`'
            g.course_id = the single course if len(host_courses) == 1 else NULL
    ```
 
+   The last tie-break, `maxid`, compares session IDs, which are UUID strings. It is consistent
+   (the same data always gives the same course) but arbitrary: it carries no meaning such as
+   "newer". It only decides when two courses have the same number of COMPLETED sessions **and**
+   the same latest `created_at`.
+
 5. `UPDATE games SET restricted = true` — **every existing game**, with or without grants. This
    preserves today's behavior: a non-admin can use an existing game only if they hold a grant on it
    **and** HOST on its course. Cost: course hosts see no existing game they weren't granted until an
@@ -222,6 +229,21 @@ Write the backfill as `op.execute` / Core SQL inside the migration — never imp
 
 `downgrade()`: drop `fk_games_course_id_courses`, then `ix_games_course_id`, then the three
 columns. The backfill is not reversible; that is acceptable.
+
+**Partial-failure risk (MySQL).** MySQL commits each DDL statement immediately, so Alembic
+cannot roll the migration back as a unit. If `upgrade()` fails partway (e.g. during the
+backfill), some of the new columns, index and FK already exist, but `alembic_version` is still
+`003`. Re-running `alembic upgrade head` then fails with "Duplicate column name". Recovery:
+
+1. Preferred: before migrating, take a dump (`mysqldump --single-transaction --routines
+   --triggers --databases buzzer`); on failure, restore it and fix the cause before retrying.
+2. Without a dump: confirm `SELECT version_num FROM alembic_version` is `003`, inspect
+   `SHOW CREATE TABLE games` and `SHOW COLUMNS FROM courses`, and drop whatever 004 created, in
+   `downgrade()` order: `ALTER TABLE games DROP FOREIGN KEY fk_games_course_id_courses`, `DROP
+   INDEX ix_games_course_id ON games`, `ALTER TABLE games DROP COLUMN course_id, DROP COLUMN
+   restricted`, `ALTER TABLE courses DROP COLUMN allow_guests` (skip any that do not exist).
+   Then re-run `alembic upgrade head`. The backfill only writes the new columns, so dropping
+   them removes any partial backfill as well.
 
 **Migration report — [Extra]** (cut → admins find affected games/users by hand).
 New read-only script `scripts/t4_migration_report.py`, rerunnable, run inside the backend
@@ -258,6 +280,7 @@ New `backend/app/schemas/host.py`:
 - `HostGameCreate` (title, description, max_players — no `course_id`; it comes from the URL).
 - `HostGameUpdate` (title, description, max_players only — hosts cannot move or restrict games).
 - `HostGameListItem`, `RosterPreviewResponse`, `RosterDiffRow` (§4.0).
+- `SessionListItem = AdminSessionItem` (an alias imported from `schemas/admin.py`, §4.0).
 - `RosterUploadMode = Literal["add_update", "replace"]`.
 - Question shapes are reused from `schemas/admin.py` (`QuestionCreate`, `QuestionUpdate`,
   `QuestionResponse`, `QuestionReorder`). Hosts need `answer_data` to edit scoring.
@@ -413,10 +436,10 @@ change for inputs that are valid today.
   game's question-ID set. (Today invalid reorders return a generic 409 `CONFLICT`; this changes
   only invalid input.)
 - `is_game_live(db, redis, game_id) -> bool` — **[Extra]** (cut → a host can change questions under
-  a running game):
+  a running game, or **delete** a running game whose players have not answered yet):
 
   ```
-  for s in GameSession where game_id = :g and status = 'IN_PROGRESS':
+  for s in GameSession where game_id = :g and status = 'IN_PROGRESS'   -- FOR SHARE (locking read)
       if redis EXISTS room:{s.room_code}: return True
   return False                      # an IN_PROGRESS row whose Redis key expired is stale, not live
   ```
@@ -434,6 +457,22 @@ change for inputs that are valid today.
   the game; a start that gets it first makes the edit see a live game → 409. (`start_game` already
   commits immediately, so the lock is short.)
 
+  **Locking reads after the lock (MySQL REPEATABLE READ).** The app runs at MySQL's default
+  isolation, `REPEATABLE READ`. Under it, a plain `SELECT` sees the snapshot taken at the
+  transaction's *first* read, and both sides have read before taking the lock:
+  - an edit: `require_game_host` loaded the game;
+  - a start: the gateway loaded the session.
+  So the lock alone does not close the race. An edit that waited would still see LOBBY, and a
+  start that waited would still see the old question set. Rule: **once a transaction holds the
+  game-row lock, every read that decides the outcome is a locking read** (`FOR SHARE`), which
+  sees the latest committed rows:
+  - `is_game_live` reads the IN_PROGRESS session rows `FOR SHARE`;
+  - `start_game` re-reads the session's status and the questions `FOR SHARE` after taking the
+    lock.
+  Deadlock check: both sides take the game row first, and the other writers of session rows
+  (`complete_game`, `abandon_game`) take no game lock and commit immediately. Switching the
+  engine to `READ COMMITTED` was considered and rejected: it changes isolation app-wide.
+
   Admin question endpoints need Redis for this check: add `redis = Depends(get_redis)` to them, as
   `routers/game.py` endpoints already do.
 
@@ -444,8 +483,11 @@ change for inputs that are valid today.
   `replace`.
 - [Extra] More than 1000 data rows → 422 `ROSTER_TOO_LARGE`, nothing written (today: truncates,
   then deactivates everyone past row 1000).
-- [T4] `mode=replace` with zero valid rows (every row errored, or only the "Points Possible" row)
-  → 422 `ROSTER_EMPTY`, nothing written. Today such an upload would deactivate the whole roster.
+- [T4] An upload with zero valid rows (every row errored, or only the "Points Possible" row)
+  changes nothing, in either mode: 200 `RosterUploadResult` with all counts 0 and `errors`
+  filled in. This is **today's behavior**: the deactivation step runs only `if seen_netids:`
+  (non-empty). The refactor must keep that guard, or a `replace` upload of only bad rows would
+  deactivate the whole roster. A T5 test locks it in (§4.14). There is no separate error code.
 - [Extra] `preview_roster_csv(db, course_id, file, mode) -> RosterPreviewResponse`: same parser,
   computes the diff without writing.
 - [Extra] `roster_version(db, course_id) -> str` — **the one function** both preview and commit
@@ -495,14 +537,18 @@ course pages. Cut → hosts ask an admin.
 
 - [T4] Question endpoints delegate to `question_service` (§4.5). Game import sanitizes through
   `sanitize_prompt` and accepts an optional `course_id` form field; a `course_id` that does not
-  exist → 404 `NOT_FOUND` before anything is created.
+  exist → 404 `NOT_FOUND` before anything is created. The course comes **only** from that form
+  field. The bundle's `game` block is validated **without** `course_id` (against title,
+  description and max_players only, with unknown keys forbidden), so a bundle containing
+  `game.course_id` is still rejected with 422, as it is today. It is not accepted and silently
+  ignored.
 - [T4] `POST /admin/games` accepts optional `course_id` (404 if the course does not exist).
 - [T4] `PUT /admin/games/{id}` accepts `restricted`.
 - [T4] **Assign / move game:** `POST /admin/games/{id}/move` body `GameMoveRequest`.
 
   ```
+  # body.course_id null -> 422 VALIDATION_ERROR from Pydantic, before the handler runs (§4.0)
   game = SELECT ... FOR UPDATE or 404; course = get(Course, body.course_id) or 404
-  body.course_id is null -> 422 INVALID_COURSE_ASSIGNMENT
   is_game_live(game) -> 409 GAME_LIVE                                  [Extra guard]
   doomed = grants on game whose user lacks HOST on body.course_id
   if not body.confirm:
@@ -543,7 +589,7 @@ Prefix `/host`, registered in `backend/app/main.py` under `/api`. Every endpoint
 | `DELETE /host/games/{game_id}/questions/{question_id}` | `require_question_host` | 204. |
 | `POST /host/games/{game_id}/questions/reorder` | `require_game_host` | `QuestionReorder` → 204. |
 | `GET /host/courses/{course_id}/roster` | `require_course_host` | `list[RosterEntryResponse]` (active and inactive). |
-| `POST /host/courses/{course_id}/roster` | `require_course_host` | Multipart: `file` (Canvas gradebook CSV, parsed by `process_roster_csv`), `mode` (default `add_update`), `version` [Extra]. → `RosterUploadResult`. `mode=replace` with no valid rows → 422 `ROSTER_EMPTY`. [Extra] `version` is **required** for `mode=replace` (missing → 422 `ROSTER_PREVIEW_REQUIRED`) and **optional** for `add_update`; whenever it is sent, in either mode, it must match `roster_version` (else 409 `ROSTER_CHANGED`). |
+| `POST /host/courses/{course_id}/roster` | `require_course_host` | Multipart: `file` (Canvas gradebook CSV, parsed by `process_roster_csv`), `mode` (default `add_update`), `version` [Extra]. → `RosterUploadResult`. No valid rows → 200 with `errors` and nothing changed (§4.5). [Extra] `version` is **required** for `mode=replace` (missing → 422 `ROSTER_PREVIEW_REQUIRED`) and **optional** for `add_update`; whenever it is sent, in either mode, it must match `roster_version` (else 409 `ROSTER_CHANGED`). |
 | `POST /host/courses/{course_id}/roster/preview` | `require_course_host` | [Extra] Same `file` + `mode`, no writes → `RosterPreviewResponse`. |
 | `PATCH /host/courses/{course_id}/roster/{entry_id}` | `require_course_host` | [Extra] `{is_active: bool}` only → `RosterEntryResponse`; 404 if the entry is not in this course. |
 | `GET /host/courses/{course_id}/sessions?status=` | `require_course_host` | `list[SessionListItem]` for sessions with this `session.course_id` (any host's), ordered `created_at` desc, **excluding sessions of restricted games the caller has no grant on** (admin sees all). `status`: optional `Literal["LOBBY","IN_PROGRESS","COMPLETED","ABANDONED"]`; omitted = all statuses; other values → 422 `VALIDATION_ERROR`. All filtering (status, restricted) is done **server-side** in the query. |
@@ -600,9 +646,14 @@ today's session delete).
 ### 4.11 Frontend — host app (`frontend/host/src/`) — [T4]
 
 - `lib/api.ts`: add `put`, `patch`, `postForm` (multipart, no `Content-Type`) and `download` (Blob
-  + `Content-Disposition` filename), copied from `frontend/admin/src/lib/api.ts`. **[Extra]** read
-  errors as `body.message ?? (string detail) ?? "Invalid input"`, falling back to `HTTP <status>`.
-  Cut → `GAME_LIVE` / `ROSTER_CHANGED` / `GAME_RESTRICTED` show as `HTTP 409` / `HTTP 403`.
+  + `Content-Disposition` filename), copied from `frontend/admin/src/lib/api.ts`. **[T4]** Every
+  helper (including `postForm` and `download`) reads an error body as follows, so the pages can
+  show the §4.0 messages (e.g. `GAME_HAS_RESULTS` vs `GAME_LIVE`):
+  1. `body.message` if it is a string (the `BuzzerError` shape);
+  2. else `body.detail` if it is a string (`HTTPException`);
+  3. else `"Invalid input"` if `body.detail` is an array (422 `VALIDATION_ERROR`);
+  4. else `HTTP <status>`.
+  Today's helpers read only `detail`, so every `BuzzerError` shows as a bare `HTTP <status>`.
 - `App.tsx`: a `HostLayout` (course picker from `GET /game/my-courses` — every course for an
   admin, HOST courses for a USER; changing it navigates to the same sub-page for the new course;
   links to Games, Roster, Sessions; "Play" → `/home`; Sign out) wrapping, inside `RequireAuth`:
@@ -653,20 +704,25 @@ today's session delete).
   access: …"), then call with `confirm=true`.
 - `pages/CoursesPage.tsx`: `allow_guests` toggle.
 - `pages/UserDetailPage.tsx`: game-access list shows each game's course; no behavior change.
-- **[Extra]** `lib/api.ts`: same error-message fix as the host app.
+- **[T4]** `lib/api.ts`: same error-message fix as the host app (§4.11). The new move/access
+  flows surface `GAME_LIVE`, `NOT_FOUND` and similar errors.
 
 ### 4.13 Implementation order
 
-On `feat/t4-host-admin-backend`:
-1. Migration 004 + models + schemas (§4.1, §4.2). Run against a copy of real data; check the
-   backfill.
+All steps on `feat/t4-host-admin`, backend first, then frontend:
+
+Backend
+1. Migration 004 + models + schemas (§4.1, §4.2). Take a `mysqldump` backup first (§4.1,
+   partial-failure risk), run the migration, and check the backfill. Accepted gap until step 4:
+   the admin create handlers accept `GameCreate.course_id` and `CourseCreate.allow_guests` but
+   ignore them. No client sends these before the frontend step, and steps 1–4 merge in one MR.
 2. `access_service` + dependencies (§4.3); `create_room`, `my-games` (§4.4).
 3. Extract `question_service` / roster `mode`; switch the admin router to them with no behavior
    change (§4.5, §4.7). The existing integration suite must pass unchanged.
 4. Admin additions (§4.7), host router (§4.8), `main.py` registration.
 5. [Extra] backend items in any order. T5 tests alongside each step. Backend context docs.
 
-On `feat/t4-host-admin-frontend` (after the backend MR merges):
+Frontend (same branch, built against the new API from steps 1–5)
 6. Host frontend (§4.11), admin frontend (§4.12), [Extra] frontend items, frontend context docs.
 
 ### 4.14 Integration tests — [T5]
@@ -704,7 +760,8 @@ on `error` codes from §4.0 and re-read state after each write.
 - **Live-edit race [Extra, if built]:** not reliably testable end-to-end; cover with the
   `GAME_LIVE` test above and rely on the row lock (§4.5).
 - **Roster:** `add_update` never deactivates; `replace` deactivates missing entries; `replace`
-  with no valid rows → 422 `ROSTER_EMPTY` and nothing deactivated; a CSV without `Student` /
+  with no valid rows (admin and host) → 200, non-empty `errors`, and nothing deactivated (re-read
+  the roster); a CSV without `Student` /
   `SIS Login ID` → `errors` and no changes; non-HOST → 403. [Extra:] preview matches what commit
   does; `replace` without `version` → 422 `ROSTER_PREVIEW_REQUIRED`; stale `version` → 409
   `ROSTER_CHANGED`; >1000 rows → 422 `ROSTER_TOO_LARGE` with no changes.
@@ -733,10 +790,10 @@ on `error` codes from §4.0 and re-read state after each write.
 
 ### 4.15 Context hierarchy updates
 
-Per `.claude/rules/context-sync.md`, edit (do not regenerate) on the branch that changes the code:
-backend branch — `backend/app/`, `models/`, `schemas/`, `common/`, `services/`, `routers/`,
-`websocket/` `CLAUDE.md`; frontend branch — `frontend/`, `frontend/host/src/` + `pages/` + `lib/`,
-`frontend/admin/src/` + `pages/` + `lib/` `CLAUDE.md`.
+Per `.claude/rules/context-sync.md`, edit (do not regenerate), all on `feat/t4-host-admin`
+alongside the code they describe: backend — `backend/app/`, `models/`, `schemas/`, `common/`,
+`services/`, `routers/`, `websocket/` `CLAUDE.md`; frontend — `frontend/`, `frontend/host/src/` +
+`pages/` + `lib/`, `frontend/admin/src/` + `pages/` + `lib/` `CLAUDE.md`.
 
 ### 4.16 Files touched
 
@@ -751,7 +808,7 @@ Host frontend (`frontend/host/src/`): `lib/api.ts`, `App.tsx`, `pages/HomePage.t
 `pages/manage/{GamesPage,QuestionEditorPage,RosterPage,SessionsPage}.tsx`.
 
 Admin frontend (`frontend/admin/src/`): `App.tsx`, `pages/AccessPage.tsx` (new),
-`pages/GamesPage.tsx`, `pages/CoursesPage.tsx`, `pages/UserDetailPage.tsx`, `lib/api.ts` [Extra].
+`pages/GamesPage.tsx`, `pages/CoursesPage.tsx`, `pages/UserDetailPage.tsx`, `lib/api.ts`.
 
 Tests: new test files and `tests/integration/t4_helpers.py` under `tests/integration/` (§4.14);
 existing test files and fixtures unchanged. Context docs: §4.15.
@@ -816,3 +873,34 @@ reachable only by other clients or scripts. Fix it anyway.
   unknown course; T5 test-data naming and teardown; "Manage this course" and AccessPage endpoints
   named. Decision: host game delete is also blocked (`GAME_HAS_RESULTS`) when **any** session has
   scores, so partial results from ABANDONED games are never silently deleted.
+- **2026-10-01, v4** — all of T4 (backend + frontend, §4.1–§4.15) moves to a single branch,
+  `feat/t4-host-admin`, replacing `feat/t4-host-admin-backend` and `feat/t4-host-admin-frontend`.
+  Why: there is one implementer, so separate MRs add coordination with no review benefit, and a
+  single branch lets the UI be tested against the new API as it is built rather than waiting for a
+  backend merge. Implementation order is unchanged (backend first, then frontend).
+  `fix/admin-rejoin-becomes-host` stays separate.
+- **2026-10-01, v5** — corrections found while implementing step 1:
+  - `INVALID_COURSE_ASSIGNMENT` removed. `GameMoveRequest.course_id` is a required `int`, so the
+    code could never be raised; a null now gets the standard 422 `VALIDATION_ERROR`.
+  - `MyGameItem.course_id` is `int | null`. As `int`, an admin's `my-games` call would fail
+    response validation on a courseless game.
+  - `SessionListItem` is defined as an alias of `AdminSessionItem` in `schemas/host.py`.
+  - Game import validates the bundle's `game` block without `course_id`.
+  - Step 1 notes the accepted create-handler gap before step 4.
+  - §4.1 documents MySQL's partial-failure risk and how to recover, and notes that the UUID
+    tie-break is consistent but arbitrary.
+- **2026-10-01, v6** — `ROSTER_EMPTY` removed (found at the start of step 3). Its rationale was
+  wrong: `process_roster_csv` / `process_roster_rows` already skip deactivation when no row is
+  valid (`if seen_netids:`), so such an upload changes nothing and returns 200 with `errors`.
+  Keeping today's behavior avoids changing the admin API in a no-behavior-change step. §4.5
+  now requires the refactor to keep that guard, and the §4.14 roster test asserts it.
+- **2026-10-01, v7** — §4.5 start race: the game-row lock alone does not close it under MySQL's
+  default `REPEATABLE READ`, because both sides read before taking the lock, so their plain
+  `SELECT`s see a stale snapshot. Fixed by requiring locking reads (`FOR SHARE`) after the lock,
+  in `is_game_live` and `start_game`. `READ COMMITTED` was rejected because it changes isolation
+  app-wide. The `is_game_live` cut note now also names deleting a running game.
+- **2026-10-01, v8** — the `lib/api.ts` error-message fix (host §4.11, admin §4.12) moves from
+  [Extra] to [T4]. The [T4] host GamesPage must show `GAME_HAS_RESULTS` vs `GAME_LIVE`, which is
+  impossible while the helpers read only `detail` (every `BuzzerError` showed as `HTTP 409`). The
+  precedence (message → string detail → "Invalid input" for validation arrays → `HTTP <status>`)
+  is now spelled out.

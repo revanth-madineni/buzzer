@@ -1,4 +1,17 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import {
+  BrowserRouter,
+  Navigate,
+  NavLink,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router-dom';
+import { Gamepad2, History, LogOut, Play, Users } from 'lucide-react';
+import { api } from './lib/api';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
 import GameLayout from './pages/game/GameLayout';
@@ -6,10 +19,97 @@ import LobbyPage from './pages/game/LobbyPage';
 import QuestionPage from './pages/game/QuestionPage';
 import ResultsPage from './pages/game/ResultsPage';
 import GameOverPage from './pages/game/GameOverPage';
+import GamesPage from './pages/manage/GamesPage';
+import QuestionEditorPage from './pages/manage/QuestionEditorPage';
+import RosterPage from './pages/manage/RosterPage';
+import SessionsPage from './pages/manage/SessionsPage';
+
+interface Course { id: number; name: string; semester: string }
+
+const SECTIONS = ['games', 'roster', 'sessions'] as const;
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
   return <>{children}</>;
+}
+
+/** Management area for one course: course picker, section links, Play, Sign out. */
+function HostLayout() {
+  const { courseId } = useParams<{ courseId: string }>();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api
+      .get<Course[]>('/game/my-courses')
+      .then(setCourses)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load courses'));
+  }, []);
+
+  // The section after /courses/:courseId/ — a game's question editor maps to "games".
+  const section = SECTIONS.find((s) => pathname.split('/')[3] === s) ?? 'games';
+
+  function switchCourse(id: string) {
+    navigate(`/courses/${id}/${section}`);
+  }
+
+  function logout() {
+    localStorage.removeItem('token');
+    navigate('/login');
+  }
+
+  const linkClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+      isActive ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700 hover:text-slate-100'
+    }`;
+
+  return (
+    <div className="flex min-h-screen">
+      <aside className="w-60 shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col">
+        <div className="px-4 py-5 border-b border-slate-700 space-y-2">
+          <h1 className="text-lg font-bold text-white px-2">Manage Course</h1>
+          <select
+            value={courseId}
+            onChange={(e) => switchCourse(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            {!courses.some((c) => String(c.id) === courseId) && <option value={courseId}>Course {courseId}</option>}
+            {courses.map((c) => (
+              <option key={c.id} value={c.id}>{c.name} — {c.semester}</option>
+            ))}
+          </select>
+          {error && <p className="text-red-400 text-xs px-2">{error}</p>}
+        </div>
+        <nav className="flex-1 p-3 space-y-1">
+          <NavLink to={`/courses/${courseId}/games`} className={linkClass}>
+            <Gamepad2 size={16} /> Games
+          </NavLink>
+          <NavLink to={`/courses/${courseId}/roster`} className={linkClass}>
+            <Users size={16} /> Roster
+          </NavLink>
+          <NavLink to={`/courses/${courseId}/sessions`} className={linkClass}>
+            <History size={16} /> Sessions
+          </NavLink>
+        </nav>
+        <div className="p-3 border-t border-slate-700 space-y-1">
+          <NavLink to="/home" className={linkClass}>
+            <Play size={16} /> Play
+          </NavLink>
+          <button
+            onClick={logout}
+            className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 hover:text-slate-100 w-full transition-colors"
+          >
+            <LogOut size={16} /> Sign out
+          </button>
+        </div>
+      </aside>
+      <main className="flex-1 overflow-auto">
+        <Outlet />
+      </main>
+    </div>
+  );
 }
 
 export default function App() {
@@ -18,6 +118,13 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/home" element={<RequireAuth><HomePage /></RequireAuth>} />
+        <Route path="/courses/:courseId" element={<RequireAuth><HostLayout /></RequireAuth>}>
+          <Route index element={<Navigate to="games" replace />} />
+          <Route path="games" element={<GamesPage />} />
+          <Route path="games/:gameId/questions" element={<QuestionEditorPage />} />
+          <Route path="roster" element={<RosterPage />} />
+          <Route path="sessions" element={<SessionsPage />} />
+        </Route>
         <Route path="/game/:code" element={<RequireAuth><GameLayout /></RequireAuth>}>
           <Route path="lobby" element={<LobbyPage />} />
           <Route path="question" element={<QuestionPage />} />

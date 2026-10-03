@@ -2,14 +2,20 @@
 
 ## Purpose
 Presentational building blocks for the admin (desktop) app: three shadcn-style primitives
-under `ui/`, styled with Tailwind for the dark slate theme. No data fetching, game state, or
-role/access logic here. The admin app has no `TimerBar` because it never runs a game.
+under `ui/`, styled with Tailwind for the dark slate theme, and one feature component,
+`MoveGamePanel`. Apart from that panel's single API call, there's no data fetching, game state,
+or role/access logic here. The admin app has no `TimerBar` because it never runs a game.
 
 ## Contents
 - `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default | outline | ghost |
   destructive`) and `size` (`sm | md | lg`). Class names are merged via `cn` from `lib/utils`.
 - `ui/card.tsx` — `Card`, `CardHeader`, `CardContent`: styled `<div>` wrappers.
 - `ui/input.tsx` — `Input`: styled native `<input>`, full width.
+- `MoveGamePanel.tsx` (T4) — assign a courseless game to a course, or move it. It calls
+  `POST /admin/games/{id}/move` with `confirm=false`, lists "These users will lose access: …"
+  (or "No grants will be dropped"), then calls with `confirm=true` and runs `onDone`. Without
+  `fixedCourseId` it shows a course picker (excluding the current course). `GamesPage` uses it
+  that way; `AccessPage` fixes the course.
 
 ## How it fits in
 - All nine pages under `pages/` import `Button` and `Input`. All except `SessionsPage` also

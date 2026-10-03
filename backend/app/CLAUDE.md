@@ -8,7 +8,7 @@ over sockets; players join and answer over sockets.
 
 ## Contents
 Top-level files:
-- `main.py` — Builds the FastAPI `app`: CORS, slowapi, exception handlers, and the four routers
+- `main.py` — Builds the FastAPI `app`: CORS, slowapi, exception handlers, and the five routers
   under `/api`. The lifespan connects Redis and runs `bootstrap_admin`. Exports **`asgi_app`**
   (`socketio.ASGIApp(sio, other_asgi_app=app)`), which is what must be served, not `app`.
 - `config.py` — `Settings` from env/`.env`: `APP_ENV`, `DATABASE_URL`, `REDIS_URL`, JWT keys,
@@ -18,16 +18,16 @@ Top-level files:
   handler returns, rolls back on exception).
 - `redis_client.py` — Lazy process-wide `get_redis()` (`decode_responses=True`) and
   `close_redis()`.
-- `migrations/` — Alembic (versions 001–003). Not covered by a context file.
+- `migrations/` — Alembic (versions 001–004). Not covered by a context file.
 
 Subdirectories (each has its own `CLAUDE.md`, so read it before working there):
 | dir | role |
 |---|---|
-| `models/` | SQLAlchemy tables. Games are **not** linked to courses; they meet only in `GameSession`. |
+| `models/` | SQLAlchemy tables. A game belongs to at most one course (`Game.course_id`, nullable); each `GameSession` keeps the course it was played in, which can differ. |
 | `schemas/` | Pydantic request/response shapes and per-question-type structure validation. |
 | `common/` | Auth dependencies (global role only), exception types, logging, rate limiter. |
 | `services/` | Business logic: access checks, room lifecycle, scoring, Redis state, roster, exports. |
-| `routers/` | REST endpoints: `auth`, `admin` (all admin-only), `game` (host-facing), `health`. |
+| `routers/` | REST endpoints: `auth`, `admin` (all admin-only), `game` (host-facing), `host` (course-host management, T4), `health`. |
 | `websocket/` | Socket.IO gateway: join/rejoin, phase state machine, answers, timers, disconnects. |
 
 ## How it fits together
@@ -37,13 +37,19 @@ Dependency direction: `routers/` and `websocket/` → `services/` → `models/` 
 
 ### Authorization is split across three layers
 1. **`common/`**: global `User.role` only (`require_admin`, `require_user` = not GUEST).
-2. **`services/game_service.py`**: course/game grants. Hosting needs course `HOST` **and** a
-   game grant. Joining as a player needs a roster row or course `PLAYER`/`HOST`; guests and admins
-   join any room.
+2. **`services/access_service.py`** (hosting) and **`game_service.authorise_player`**
+   (joining):
+   - Hosting a game needs `HOST` on **the game's course**, plus a grant if the game is
+     `restricted`.
+   - Joining as a player needs a roster row or course `PLAYER`/`HOST` on the session's course.
+     Guests and admins join any room.
+   - `common/dependencies.py` wraps the hosting rule as `require_course_host`,
+     `require_game_host`, `require_question_host` and `require_session_host`.
 3. **`routers/game.py` / `websocket/gateway.py`**: session **ownership**
    (`host_user_id == user.id` or ADMIN) for managing a session or joining it as host.
-There is no single "can this user act on this course" helper. Each new endpoint has to pick the
-right layer itself. Full tables are in `common/`, `services/`, and `routers/` `CLAUDE.md`.
+New host-facing endpoints should use the `require_*_host` dependencies rather than writing their
+own queries. Older endpoints still use layer 3 (ownership) only. Full tables are in `common/`,
+`services/`, and `routers/` `CLAUDE.md`.
 
 ### Where state lives
 | store | holds | lifetime |
@@ -55,8 +61,9 @@ right layer itself. Full tables are in `common/`, `services/`, and `routers/` `C
 
 ### Data flow for one game
 1. **Create room (REST, host).** `POST /api/game/rooms` → `routers/game.py` →
-   `game_service.create_room`, which checks course HOST and game access, enforces `MAX_ROOMS`, and
-   generates a code. It inserts `GameSession(status=LOBBY)` in MySQL and `room:{code}` in Redis.
+   `game_service.create_room`. It checks access, requires the room's course to be the game's
+   course (an admin's first room attaches a courseless game), enforces `MAX_ROOMS`, and generates
+   a code. It inserts `GameSession(status=LOBBY)` in MySQL and `room:{code}` in Redis.
 2. **Player auth (REST).** `GET /api/game/rooms/{code}/ping`, then a token from
    `/api/auth/guest`, `/api/auth/login`, or OAuth2 (`oauth2-callback` → temp token →
    `exchange-temp`).
@@ -95,8 +102,10 @@ right layer itself. Full tables are in `common/`, `services/`, and `routers/` `C
    - The host gets `game_over` with anonymous scores and a per-question summary. Each player
      gets their own summary.
    - Redis `session:*` keys are *not* cleaned up.
-9. **After the game (REST).** Host: `/api/game/sessions/{id}/export|guests|merge-guest`. Admin:
-   `/api/admin/sessions/{id}/export` (Canvas) and `/report`. All of these read MySQL only.
+9. **After the game (REST).** All of these read MySQL only.
+   - Session host: `/api/game/sessions/{id}/export|guests|merge-guest`.
+   - Any HOST of the session's course: `/api/host/sessions/{id}/export|report` (COMPLETED only).
+   - Admin: `/api/admin/sessions/{id}/export` (Canvas) and `/report`.
 
 Side paths:
 - **Host disconnects while `IN_PROGRESS`:** the question is auto-locked with the remaining time

@@ -4,12 +4,23 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
 
 if TYPE_CHECKING:
+    from .course import Course
     from .session import GameSession, SessionScore
     from .user import User, UserGameAccess
 
@@ -23,8 +34,17 @@ class Game(Base):
         Text, nullable=False, default="", server_default=sa.text("''")
     )
     max_players: Mapped[int] = mapped_column(Integer, default=150, nullable=False)
+    course_id: Mapped[int | None] = mapped_column(
+        ForeignKey("courses.id", name="fk_games_course_id_courses"),
+        nullable=True,
+        index=True,
+    )
+    restricted: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    course: Mapped[Course | None] = relationship("Course", back_populates="games")
     questions: Mapped[list[Question]] = relationship(
         "Question",
         back_populates="game",

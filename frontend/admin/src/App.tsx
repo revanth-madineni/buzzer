@@ -1,5 +1,5 @@
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useNavigate, NavLink } from 'react-router-dom';
-import { BookOpen, Users, Gamepad2, UserX, LogOut, History } from 'lucide-react';
+import { BookOpen, Users, Gamepad2, UserX, LogOut, History, KeyRound } from 'lucide-react';
 import LoginPage from './pages/LoginPage';
 import CoursesPage from './pages/CoursesPage';
 import RosterPage from './pages/RosterPage';
@@ -9,6 +9,7 @@ import GuestsPage from './pages/GuestsPage';
 import GamesPage from './pages/GamesPage';
 import QuestionEditorPage from './pages/QuestionEditorPage';
 import SessionsPage from './pages/SessionsPage';
+import AccessPage from './pages/AccessPage';
 
 function RequireAdmin() {
   const token = localStorage.getItem('token');
@@ -31,6 +32,8 @@ function AdminLayout() {
         : 'text-slate-300 hover:bg-slate-700 hover:text-slate-100'
     }`;
 
+  const sectionClass = 'px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-slate-500';
+
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
@@ -39,20 +42,25 @@ function AdminLayout() {
           <h1 className="text-lg font-bold text-white">Buzzer Admin</h1>
         </div>
         <nav className="flex-1 p-3 space-y-1">
-          <NavLink to="/courses" className={linkClass}>
-            <BookOpen size={16} /> Courses
-          </NavLink>
+          <p className={sectionClass}>Admin</p>
           <NavLink to="/users" className={linkClass}>
             <Users size={16} /> Users
           </NavLink>
+          <NavLink to="/courses" className={linkClass}>
+            <BookOpen size={16} /> Courses
+          </NavLink>
+          <NavLink to="/access" className={linkClass}>
+            <KeyRound size={16} /> Access
+          </NavLink>
+          <p className={`${sectionClass} pt-4`}>Host tools</p>
           <NavLink to="/games" className={linkClass}>
             <Gamepad2 size={16} /> Games
           </NavLink>
-          <NavLink to="/guests" className={linkClass}>
-            <UserX size={16} /> Guests
-          </NavLink>
           <NavLink to="/sessions" className={linkClass}>
             <History size={16} /> Sessions
+          </NavLink>
+          <NavLink to="/guests" className={linkClass}>
+            <UserX size={16} /> Guests
           </NavLink>
         </nav>
         <div className="p-3 border-t border-slate-700">
@@ -88,9 +96,10 @@ export default function App() {
             <Route path="/games" element={<GamesPage />} />
             <Route path="/games/:gameId/questions" element={<QuestionEditorPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
+            <Route path="/access" element={<AccessPage />} />
           </Route>
         </Route>
-        <Route path="*" element={<Navigate to="/courses" replace />} />
+        <Route path="*" element={<Navigate to="/users" replace />} />
       </Routes>
     </BrowserRouter>
   );

@@ -8,15 +8,21 @@ import structlog
 from rapidfuzz.distance import Levenshtein
 from redis.asyncio import Redis
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from ..common.exceptions import ConflictError, ForbiddenError, NotFoundError
-from ..models.course import CourseRoster, UserCourseAccess
-from ..models.game import Game, Question, UserGameAccess
+from ..common.exceptions import (
+    BuzzerError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+)
+from ..models.course import Course, CourseRoster, UserCourseAccess
+from ..models.game import Game, Question
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
 from ..schemas.game import ScoreResult
+from . import access_service as access
 from . import state_service as state
 
 logger = structlog.get_logger()
@@ -44,45 +50,71 @@ async def generate_room_code(redis: Redis) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Thin wrappers over access_service, which holds the one definition of "is HOST".
+
+
 async def assert_host_can_use_course(
     db: AsyncSession, user: User, course_id: int
 ) -> None:
-    """Admin can use any course; USER must have HOST role in user_course_access."""
-    if user.role == "ADMIN":
-        from ..models.course import Course
-
-        course = await db.get(Course, course_id)
-        if not course:
-            raise NotFoundError(f"Course {course_id} not found")
-        return
-
-    result = await db.execute(
-        select(UserCourseAccess).where(
-            UserCourseAccess.user_id == user.id,
-            UserCourseAccess.course_id == course_id,
-            UserCourseAccess.role == "HOST",
-        )
-    )
-    if not result.scalar_one_or_none():
-        raise ForbiddenError("You do not have HOST access to this course")
+    course = await db.get(Course, course_id)
+    if not course:
+        raise NotFoundError(f"Course {course_id} not found")
+    if not await access.has_course_host(db, user, course.id):
+        raise ForbiddenError(access.COURSE_HOST_REQUIRED)
 
 
 async def assert_host_can_use_game(db: AsyncSession, user: User, game_id: int) -> None:
-    """Admin can use any game; USER must have an entry in user_game_access."""
-    if user.role == "ADMIN":
-        game = await db.get(Game, game_id)
-        if not game:
-            raise NotFoundError(f"Game {game_id} not found")
-        return
+    game = await db.get(Game, game_id)
+    if not game:
+        raise NotFoundError(f"Game {game_id} not found")
+    await access.assert_can_use_game(db, user, game)
 
-    result = await db.execute(
-        select(UserGameAccess).where(
-            UserGameAccess.user_id == user.id,
-            UserGameAccess.game_id == game_id,
+
+# ---------------------------------------------------------------------------
+# Live-game guard (spec §4.5). Every guarded write — question create/update/
+# delete/reorder, host game update/delete, admin move — calls lock_game, then
+# assert_not_live, then writes. start_game takes the same lock. After the lock,
+# reads that decide the outcome must be locking reads (REPEATABLE READ).
+# ---------------------------------------------------------------------------
+
+
+async def lock_game(db: AsyncSession, game_id: int) -> Game:
+    """SELECT … FOR UPDATE on the game row, held until the transaction ends."""
+    game = (
+        await db.execute(
+            select(Game)
+            .where(Game.id == game_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
-    )
-    if not result.scalar_one_or_none():
-        raise ForbiddenError("You do not have access to this game")
+    ).scalar_one_or_none()
+    if not game:
+        raise NotFoundError(f"Game {game_id} not found")
+    return game
+
+
+async def is_game_live(db: AsyncSession, redis: Redis, game_id: int) -> bool:
+    """An IN_PROGRESS session whose Redis room still exists. A row whose key
+    expired is stale, not live. Locking read: see the block comment above."""
+    room_codes = (
+        await db.execute(
+            select(GameSession.room_code)
+            .where(
+                GameSession.game_id == game_id,
+                GameSession.status == "IN_PROGRESS",
+            )
+            .with_for_update(read=True)
+        )
+    ).scalars()
+    for code in room_codes:
+        if await redis.exists(f"room:{code}"):
+            return True
+    return False
+
+
+async def assert_not_live(db: AsyncSession, redis: Redis, game_id: int) -> None:
+    if await is_game_live(db, redis, game_id):
+        raise BuzzerError("GAME_LIVE", "This game is being played right now", 409)
 
 
 # ---------------------------------------------------------------------------
@@ -98,9 +130,38 @@ async def create_room(
     course_id: int,
     max_rooms: int = 50,
 ) -> GameSession:
-    # Validate access
-    await assert_host_can_use_course(db, host, course_id)
-    await assert_host_can_use_game(db, host, game_id)
+    # Course first, so a bad course_id 404s before a courseless game is attached.
+    course = await db.get(Course, course_id)
+    if not course:
+        raise NotFoundError(f"Course {course_id} not found")
+
+    # Row lock until the request's transaction ends: serializes concurrent room
+    # creations for one game, so two admins cannot attach it to different courses.
+    game = (
+        await db.execute(select(Game).where(Game.id == game_id).with_for_update())
+    ).scalar_one_or_none()
+    if not game:
+        raise NotFoundError(f"Game {game_id} not found")
+
+    if host.role == "ADMIN":
+        if game.course_id is None:
+            game.course_id = course.id
+            logger.info(
+                "game_attached_on_first_room",
+                game_id=game.id,
+                course_id=course.id,
+                user_id=host.id,
+            )
+    else:
+        await access.assert_can_use_game(db, host, game)
+
+    if course.id != game.course_id:
+        game_course = await db.get(Course, game.course_id)
+        raise BuzzerError(
+            "COURSE_MISMATCH",
+            f"This game belongs to course {game_course.name} ({game_course.semester})",
+            422,
+        )
 
     # Enforce global room limit — count only LOBBY/IN_PROGRESS rooms.
     # COMPLETED/ABANDONED rooms may linger in Redis briefly for reconnection
@@ -120,7 +181,6 @@ async def create_room(
     if room_count >= max_rooms:
         raise ConflictError(f"Maximum of {max_rooms} concurrent rooms reached")
 
-    await db.get(Game, game_id)
     room_code = await generate_room_code(redis)
 
     session = GameSession(
@@ -185,6 +245,17 @@ async def start_game(
     db: AsyncSession, redis: Redis, session: GameSession
 ) -> list[Question]:
     """Transition LOBBY → IN_PROGRESS. Returns ordered question list."""
+    # Same game-row lock as every guarded edit (lock_game), so a start and an
+    # edit serialize. The reads after it are locking reads: under REPEATABLE READ
+    # a plain SELECT would see the snapshot from this transaction's first read,
+    # missing an edit that committed while we waited (spec §4.5).
+    await lock_game(db, session.game_id)
+    await db.execute(
+        select(GameSession)
+        .where(GameSession.id == session.id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
     if session.status != "LOBBY":
         raise ConflictError(f"Cannot start a game in '{session.status}' state")
 
@@ -192,6 +263,8 @@ async def start_game(
         select(Question)
         .where(Question.game_id == session.game_id)
         .order_by(Question.order_index)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
     )
     questions = result.scalars().all()
     if not questions:

@@ -20,7 +20,7 @@ interface UserDetail {
   game_access: number[];
 }
 interface Course { id: number; name: string; semester: string }
-interface Game { id: number; title: string }
+interface Game { id: number; title: string; course_id: number | null }
 
 interface CourseSelection { id: number; role: 'HOST' | 'PLAYER'; checked: boolean }
 interface GameSelection { id: number; checked: boolean }
@@ -171,6 +171,15 @@ export default function UserDetailPage() {
 
   const courseMap = Object.fromEntries(courses.map((c) => [c.id, c]));
   const gameMap = Object.fromEntries(games.map((g) => [g.id, g]));
+
+  /** Game title with its course, so it's clear which course a grant applies to. */
+  function gameLabel(id: number): string {
+    const game = gameMap[id];
+    if (!game) return `Game ${id}`;
+    const course = game.course_id !== null ? courseMap[game.course_id] : undefined;
+    const where = course ? `${course.name} — ${course.semester}` : 'Unassigned';
+    return `${game.title} (${where})`;
+  }
 
   const grantedCourseIds = new Set(user.course_access.map((ca) => ca.course_id));
   const grantedGameIds = new Set(user.game_access);
@@ -399,10 +408,9 @@ export default function UserDetailPage() {
             <p className="text-slate-500 text-sm">No game access granted.</p>
           )}
           {user.game_access.map((gid) => {
-            const game = gameMap[gid];
             return (
               <div key={gid} className="flex items-center justify-between">
-                <span className="text-slate-200 text-sm">{game ? game.title : `Game ${gid}`}</span>
+                <span className="text-slate-200 text-sm">{gameLabel(gid)}</span>
                 <Button variant="ghost" size="sm" onClick={() => void revokeGameAccess(gid)}>
                   <Trash2 size={12} />
                 </Button>
@@ -424,7 +432,6 @@ export default function UserDetailPage() {
                 <span className="text-xs text-slate-400">Select all</span>
               </div>
               {gameSelections.map((sel, i) => {
-                const game = gameMap[sel.id];
                 return (
                   <div key={sel.id} className="flex items-center gap-2">
                     <input
@@ -437,7 +444,7 @@ export default function UserDetailPage() {
                         )
                       }
                     />
-                    <span className="text-sm text-slate-200">{game ? game.title : `Game ${sel.id}`}</span>
+                    <span className="text-sm text-slate-200">{gameLabel(sel.id)}</span>
                   </div>
                 );
               })}

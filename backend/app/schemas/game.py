@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-
 from pydantic import BaseModel, ConfigDict, field_validator
-
 
 # ---------------------------------------------------------------------------
 # Client-safe question — answer_data and grading_type never exposed
@@ -82,6 +80,8 @@ class MyGameItem(BaseModel):
     title: str
     description: str
     max_players: int
+    course_id: int | None  # null only for admins (courseless games)
+    restricted: bool
 
 
 # ---------------------------------------------------------------------------
