@@ -61,12 +61,18 @@ function describeCorrectAnswer(
 
 function QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number }) {
   const options = item.config.options;
-  const isCompleteness = item.answerReveal.type === 'completeness';
+  const isCompleteness =
+    item.answerReveal.type === 'completeness' ||
+    (item.type === 'map_pin' && item.gradingType === 'COMPLETENESS');
   const noAnswer = !item.playerAnswer;
   const isCorrect = !isCompleteness && !noAnswer && item.pointsAwarded > 0;
   const showCorrectAnswer = !isCompleteness && !isCorrect;
 
-  const playerAnswerLabel = describePlayerAnswer(item.playerAnswer, item.type, options);
+  // map_pin recap: points earned / possible, no image (spec §4.10).
+  const playerAnswerLabel =
+    item.type === 'map_pin' && !noAnswer
+      ? `${item.pointsAwarded.toLocaleString()} / ${item.maxPoints.toLocaleString()} pts`
+      : describePlayerAnswer(item.playerAnswer, item.type, options);
   const correctAnswerLabel = !isCompleteness
     ? describeCorrectAnswer(item.answerReveal, options)
     : '';
