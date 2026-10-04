@@ -306,11 +306,13 @@ defaults (0.04 / 0.15) are higher (§4.12).
 
 **Update-path fix (all types).** Today `update_question` copies non-null fields onto the model
 with no structural check (`schemas/CLAUDE.md` gotcha). New behaviour:
-1. Build `merged` from the existing question's seven input fields, which are exactly
-   `QuestionCreate`'s fields: `type`, `grading_type`, `prompt`, `config`, `answer_data`,
-   `time_limit_seconds`, `points_value`. Overlay the PUT's non-null fields.
-   - `QuestionCreate` has no `game_id` or `order_index`; those come from the URL and the
-     service.
+1. Build `merged` from the existing question's seven content fields: `type`,
+   `grading_type`, `prompt`, `config`, `answer_data`, `time_limit_seconds`,
+   `points_value`. Overlay the PUT's non-null values for those fields.
+   - `QuestionCreate` has no `game_id` (it comes from the URL). It **does** have an optional
+     `order_index`, as does `QuestionUpdate`, but that is positional, not content: it is left
+     out of `merged` (so it defaults to `None` during validation) and, when the PUT carries
+     it, applied to the row as before.
    - `config` and `answer_data` are **replaced** whole, not deep-merged. They are the only
      fields a PUT could want to "clear", and sending `{}` does that, because `{}` is not
      null. All other question columns are NOT NULL, so "non-null fields only" loses nothing.
@@ -967,3 +969,5 @@ Per `.claude/rules/context-sync.md`, update:
     is sent, so an immediate GET raced the commit and 404'd).
   - Trailing data after the end of an image counts as metadata.
   - `ImageResponse` includes `sha256`.
+- 2026-10-04 — Corrected §4.5: `QuestionCreate` and `QuestionUpdate` both have an optional
+  `order_index`; it stays out of the merged validation and is applied from the PUT.
