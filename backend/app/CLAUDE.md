@@ -140,7 +140,8 @@ Most important cross-cutting issues. Details and more are in each subdirectory's
   behind Traefik's OAuth2 middleware (`routers/CLAUDE.md`).
 - **`get_db` commits after the response is sent.** Every REST write handler commits itself
   before returning, and new ones must (`docs/commit-race.md`). The socket gateway's `_db()`
-  has a related gap: `submit_answer` emits before its commit (`websocket/CLAUDE.md`).
+  has the same shape: commit before emitting about a write (`submit_answer` does;
+  `websocket/CLAUDE.md`).
 - **Error shape varies.** Clients see `{"error","message"}` from `BuzzerError`,
   `{"error":"VALIDATION_ERROR","detail":[…]}` from validation, and `{"detail": "..."}` from
   `HTTPException`. The player frontend only reads `detail`.

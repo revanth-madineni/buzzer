@@ -97,14 +97,13 @@ their own points and rank. The host receives answer distributions and an anonymo
 - **`rejoin_room` makes any ADMIN a host.** `is_host = user.id == host_user_id or role ==
   "ADMIN"`. An admin who joined as a **player** and reconnects is re-registered as HOST (joins
   the host room, can advance the game, and stops being a player).
-- **Answer commit happens after the emits.** `on_submit_answer` runs inside `async with
-  _db()`, which commits only when the block exits, but `answer_received`, `answer_status` and
-  `answer_phase_ended` are emitted inside it. A host that advances the instant the last answer
-  arrives can read MySQL before that `SessionScore` is committed: `question_results` then has
-  `totalAnswered` one short (the Redis distribution is right), and that player's `yourPoints`
-  / rank miss the answer. Seen with `scripts/simulate_players.py` fast players + an immediate
-  advance; a human host (or auto-advance's 1.5 s delay) almost never hits it. Same class of
-  bug as `docs/commit-race.md`; the fix would be to commit right after `record_answer`.
+- **Commit before you emit.** `_db()` only commits when its block exits, so a handler that
+  emits inside the block announces writes that other handlers can't see yet.
+  `on_submit_answer` therefore calls `await db.commit()` right after `record_answer`, before
+  `answer_received` / `answer_status`. Without it, a host advancing on the last
+  `answer_status` read MySQL too early (results reported 0–3 of 4 answers, and players'
+  `yourPoints` / rank missed theirs). `tests/integration/test_answer_commit.py` guards it.
+  Same class of bug as `docs/commit-race.md`.
 - **Double-scoring race.** `submit_answer` checks `has_answered`, then `record_answer` writes
   the DB row and only afterwards adds to the Redis answered set. Two concurrent submits from the
   same user (double tap, two tabs) can both pass the check, and the DB has no unique constraint
