@@ -2,9 +2,10 @@
 
 ## Purpose
 Presentational building blocks for the admin (desktop) app: three shadcn-style primitives
-under `ui/`, styled with Tailwind for the dark slate theme, and one feature component,
-`MoveGamePanel`. Apart from that panel's single API call, there's no data fetching, game state,
-or role/access logic here. The admin app has no `TimerBar` because it never runs a game.
+under `ui/`, styled with Tailwind for the dark slate theme, and two feature components,
+`MoveGamePanel` and (T7) `MapCanvas`. Apart from the panel's single API call and the canvas's
+image load (via `lib/images.ts`), there's no data fetching, game state, or role/access logic
+here. The admin app has no `TimerBar` because it never runs a game.
 
 ## Contents
 - `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default | outline | ghost |
@@ -16,6 +17,9 @@ or role/access logic here. The admin app has no `TimerBar` because it never runs
   (or "No grants will be dropped"), then calls with `confirm=true` and runs `onDone`. Without
   `fixedCourseId` it shows a course picker (excluding the current course). `GamesPage` uses it
   that way; `AccessPage` fixes the course.
+- `MapCanvas.tsx` (T7) — the shared map canvas, byte-identical to the player's and host's
+  copies (see `frontend/player/src/components/CLAUDE.md`). `QuestionEditorPage` uses it with
+  `heightCap={0.7}` and `onPoint` to place a map-pin target, and `draw` for the live circles.
 
 ## How it fits in
 - All nine pages under `pages/` import `Button` and `Input`. All except `SessionsPage` also

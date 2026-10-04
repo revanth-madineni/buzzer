@@ -2,8 +2,8 @@
 
 ## Purpose
 Small shared helpers for the admin (desktop) app: a JSON fetch wrapper for the REST API with
-the full set of verbs plus multipart upload and file download, and a Tailwind class-merge
-helper. There is no socket code and no role logic here. The admin app never opens a socket.
+the full set of verbs plus multipart upload and file download, a Tailwind class-merge
+helper, and (T7) map-pin geometry and authenticated image loading. There is no socket code and no role logic here. The admin app never opens a socket.
 
 ## Contents
 - `api.ts` — every method sends `Authorization: Bearer <localStorage.token>` when a token
@@ -14,11 +14,16 @@ helper. There is no socket code and no role logic here. The admin app never open
     with `Content-Type: application/json`. An empty response body (the many 204s) resolves to
     `{}`.
   - `api.postForm<T>(path, form: FormData)` — multipart POST with **no** `Content-Type`, so
-    the browser sets the boundary. Used for the game JSON import.
+    the browser sets the boundary. Used for the game JSON import and map-pin image upload.
   - `api.download(path)` — GET, reads the filename from `Content-Disposition:
     filename="…"` (falls back to `download`), wraps the body in a Blob, and clicks a temporary
     `<a download>`. Used for CSV/JSON/HTML exports.
 - `utils.ts` — `cn(...)` (clsx + tailwind-merge), used by `components/ui/*`.
+- `mapPin.ts` (T7) — map-pin geometry and drawing, **byte-identical to the player's and
+  host's copies** (see `frontend/player/src/lib/CLAUDE.md`). Untested (no test runner).
+- `images.ts` (T7) — `loadImage` / `preloadImages`: images fetched with the Bearer token as
+  blob URLs, promise cached per ID, failures evicted, one shared `POST /api/auth/refresh` +
+  retry on a 401. Byte-identical to the other apps' copies.
 
 ## How it fits in
 Consumers (all under `pages/`), grouped by the backend guard (see
@@ -36,7 +41,7 @@ dependencies):
 | `UserDetailPage` | `GET/PUT/DELETE /admin/users/{id}`, `POST`/`DELETE .../course-access[/{courseId}]`, `POST`/`DELETE .../game-access[/{gameId}]`, plus `GET /admin/courses` and `/admin/games` for the pickers |
 | `GuestsPage` | `GET /admin/users/guests`, `POST /admin/users/merge-guest`, `DELETE /admin/users/{id}` |
 | `GamesPage` | `GET/POST /admin/games` (with `course_id`), `GET /admin/courses`, `PUT`/`DELETE /admin/games/{id}`, `postForm /admin/games/import` (`file` + `course_id`), plus `MoveGamePanel` |
-| `QuestionEditorPage` | `GET /admin/games/{id}`, `GET/POST .../questions`, `PUT`/`DELETE .../questions/{qid}`, `POST .../questions/reorder`, `download .../export` |
+| `QuestionEditorPage` | `GET /admin/games/{id}`, `GET/POST .../questions`, `PUT`/`DELETE .../questions/{qid}`, `POST .../questions/reorder`, `download .../export`, `postForm /admin/images` (T7, with the game's `course_id`); `GET /images/{id}` via `lib/images.ts` |
 | `SessionsPage` | `GET /admin/sessions[?status=]`, `download /admin/sessions/{id}/export?…` (raw or Canvas CSV), `download .../report` (HTML) |
 
 **Not under `/admin`:**
@@ -74,7 +79,8 @@ is **present**, despite its name.
   backend sends) and ignores RFC 5987 `filename*=`. The Blob URL is revoked right after
   `click()`, which some browsers can race. There's no progress indicator, and the whole file is
   buffered in memory.
-- **No token refresh.** Nothing calls `/api/auth/refresh`, and there is no 401 retry. After the
+- **Token refresh only for images.** Only `images.ts` calls `/api/auth/refresh` (once, on a
+  401 for an image); `api.ts` has no 401 retry. After the
   2 h access token expires every call fails, but `RequireAdmin` still lets the user in.
 - JSON methods set `Content-Type: application/json` even on GET/DELETE.
 - This file is identical to the host app's `lib/api.ts`, but it is a copy, not shared. All
