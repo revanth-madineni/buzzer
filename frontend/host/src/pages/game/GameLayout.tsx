@@ -1,11 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../lib/api';
+import { preloadImages } from '../../lib/images';
 import { QRCodeSVG } from 'qrcode.react';
 import { io, Socket } from 'socket.io-client';
 import type {
   AnswerPhaseEndedPayload,
   AnswerStatusPayload,
+  GameImagesPayload,
   HostGameOverPayload,
   HostPhase,
   HostResultsPayload,
@@ -186,6 +188,12 @@ export default function GameLayout() {
       setGameOver(data);
       setPhase('gameover');
       navigate(`/game/${code}/gameover`);
+    });
+
+    // Map images for the results heatmaps. A host that refreshes mid-game misses this
+    // (its sync_state has no imageIds); MapPinHeatmap then loads on demand.
+    sock.on('game_images', (data: GameImagesPayload) => {
+      preloadImages(data.imageIds ?? []);
     });
 
     sock.on('game_abandoned', () => {

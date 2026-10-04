@@ -84,6 +84,7 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
     true_false: 'True / False',
     fill_in_the_blank: 'Fill in the Blank',
     multi_select: 'Multi-Select',
+    map_pin: 'Map Pin',
   };
 
   const answeredPct = totalPlayers > 0 ? Math.round((totalAnswered / totalPlayers) * 100) : 0;
@@ -197,7 +198,20 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
 
       {/* Footer stats */}
       <div className="flex items-center gap-4 pt-1 border-t border-slate-700 text-sm">
-        {gradingType === 'ACCURACY' ? (
+        {type === 'map_pin' ? (
+          // Geometry-based, so the same for both grading types. No image here.
+          <>
+            <span className="text-green-400 font-semibold">
+              {item.withinFullPct == null ? '—' : `${item.withinFullPct}%`} within target
+            </span>
+            <span className="text-slate-600">·</span>
+            <span className="text-slate-400">
+              {item.averageCredit == null ? '—' : `${Math.round(item.averageCredit * 100)}%`} average credit
+            </span>
+            <span className="text-slate-600">·</span>
+            <span className="text-slate-400">{answeredPct}% responded</span>
+          </>
+        ) : gradingType === 'ACCURACY' ? (
           <>
             <span className="text-green-400 font-semibold">{correctCount} correct</span>
             <span className="text-slate-600">·</span>
