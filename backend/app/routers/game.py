@@ -165,6 +165,7 @@ async def create_room(
         course_id=body.course_id,
         max_rooms=settings.MAX_ROOMS,
     )
+    await db.commit()
     return {"room_code": session.room_code, "session_id": session.id}
 
 
@@ -312,6 +313,7 @@ async def merge_guest_for_session(
         real_user_id=real_user.id,
         session_id=session_id,
     )
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------

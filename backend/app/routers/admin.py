@@ -134,6 +134,7 @@ async def update_course(
         course.semester = body.semester
     if body.allow_guests is not None:
         course.allow_guests = body.allow_guests
+    await db.commit()
     return course
 
 
@@ -170,7 +171,9 @@ async def upload_roster(
     if not course:
         raise NotFoundError(f"Course {course_id} not found")
     content = await file.read()
-    return await process_roster_csv(db, course_id, content)
+    result = await process_roster_csv(db, course_id, content)
+    await db.commit()
+    return result
 
 
 @router.post("/courses/{course_id}/roster/import", response_model=RosterUploadResult)
@@ -219,6 +222,7 @@ async def patch_roster_entry(
         entry.full_name = body.full_name.strip()
     if body.email is not None:
         entry.email = str(body.email).lower()
+    await db.commit()
     return entry
 
 
@@ -288,6 +292,7 @@ async def update_game(
         game.max_players = body.max_players
     if body.restricted is not None:
         game.restricted = body.restricted
+    await db.commit()
     return game
 
 
@@ -314,6 +319,7 @@ async def delete_game(
         await db.execute(sa_delete(_SS).where(_SS.session_id.in_(session_ids)))
     await db.execute(sa_delete(_GS).where(_GS.game_id == game_id))
     await db.delete(game)
+    await db.commit()
 
 
 def _access_entry(user: User) -> dict:
@@ -370,6 +376,7 @@ async def move_game(
         to_course_id=body.course_id,
         dropped_grants=len(doomed),
     )
+    await db.commit()
     return {"applied": True, "game": game, "dropped_grants": dropped}
 
 
@@ -456,7 +463,9 @@ async def update_question(
         raise NotFoundError(f"Question {question_id} not found in game {game_id}")
     await game_service.lock_game(db, game_id)
     await game_service.assert_not_live(db, redis, game_id)
-    return await question_service.update_question(db, question, body)
+    updated = await question_service.update_question(db, question, body)
+    await db.commit()
+    return updated
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)
@@ -476,6 +485,7 @@ async def delete_question(
     await game_service.lock_game(db, game_id)
     await game_service.assert_not_live(db, redis, game_id)
     await question_service.delete_question(db, question)
+    await db.commit()
 
 
 @router.post("/games/{game_id}/questions/reorder", status_code=204)
@@ -489,6 +499,7 @@ async def reorder_questions(
     game = await game_service.lock_game(db, game_id)
     await game_service.assert_not_live(db, redis, game.id)
     await question_service.reorder_questions(db, game, body.order)
+    await db.commit()
 
 
 @router.get("/games/{game_id}/export")
@@ -763,6 +774,7 @@ async def update_user(
         user.password_hash = hash_password(body.password)
     if body.role is not None:
         user.role = body.role
+    await db.commit()
     return user
 
 
@@ -784,6 +796,7 @@ async def delete_user(
 
     await db.execute(sa_delete(SessionScore).where(SessionScore.user_id == user_id))
     await db.delete(user)
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -818,6 +831,7 @@ async def grant_course_access(
         db.add(
             UserCourseAccess(user_id=user_id, course_id=body.course_id, role=body.role)
         )
+    await db.commit()
 
 
 @router.delete("/users/{user_id}/course-access/{course_id}", status_code=204)
@@ -839,6 +853,7 @@ async def revoke_course_access(
             f"No course access record for user {user_id} / course {course_id}"
         )
     await db.delete(access)
+    await db.commit()
 
 
 @router.post("/users/{user_id}/game-access", status_code=204)
@@ -863,6 +878,7 @@ async def grant_game_access(
     )
     if not result.scalar_one_or_none():
         db.add(UserGameAccess(user_id=user_id, game_id=body.game_id))
+    await db.commit()
 
 
 @router.delete("/users/{user_id}/game-access/{game_id}", status_code=204)
@@ -884,6 +900,7 @@ async def revoke_game_access(
             f"No game access record for user {user_id} / game {game_id}"
         )
     await db.delete(access)
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -930,6 +947,7 @@ async def merge_guest(
         guest.netid = normalized_netid
         guest.role = "USER"
         logger.info("guest_promoted", guest_id=guest_user_id, netid=normalized_netid)
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------

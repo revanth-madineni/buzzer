@@ -120,6 +120,7 @@ async def create_course_game(
     logger.info(
         "host_game_created", game_id=game.id, course_id=course.id, user_id=user.id
     )
+    await db.commit()
     return game
 
 
@@ -145,6 +146,7 @@ async def update_game(
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(game, field, value)
     await db.flush()
+    await db.commit()
     return game
 
 
@@ -207,6 +209,7 @@ async def delete_game(
         user_id=user.id,
         sessions_deleted=len(session_ids),
     )
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +236,9 @@ async def create_question(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> Question:
     await _guard_write(db, redis, game.id)
-    return await question_service.create_question(db, game, body)
+    question = await question_service.create_question(db, game, body)
+    await db.commit()
+    return question
 
 
 @router.post("/games/{game_id}/questions/reorder", status_code=204)
@@ -245,6 +250,7 @@ async def reorder_questions(
 ) -> None:
     await _guard_write(db, redis, game.id)
     await question_service.reorder_questions(db, game, body.order)
+    await db.commit()
 
 
 @router.put("/games/{game_id}/questions/{question_id}", response_model=QuestionResponse)
@@ -255,7 +261,9 @@ async def update_question(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> Question:
     await _guard_write(db, redis, question.game_id)
-    return await question_service.update_question(db, question, body)
+    updated = await question_service.update_question(db, question, body)
+    await db.commit()
+    return updated
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)
@@ -266,6 +274,7 @@ async def delete_question(
 ) -> None:
     await _guard_write(db, redis, question.game_id)
     await question_service.delete_question(db, question)
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +308,7 @@ async def upload_roster(
 ) -> RosterUploadResult:
     result = await process_roster_csv(db, course.id, await file.read(), mode)
     logger.info("host_roster_uploaded", course_id=course.id, user_id=user.id, mode=mode)
+    await db.commit()
     return result
 
 
