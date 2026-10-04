@@ -15,13 +15,15 @@ Top-level files:
 - `index.css` — Tailwind directives and global styles.
 - `types/game.ts` — TypeScript shapes for socket payloads (`SyncStatePayload`,
   `QuestionPayload`, `AnswerResultPayload`, `PlayerResultsPayload`, `PlayerAnswerReveal`,
-  `PlayerGameOverPayload`, …) and `PlayerPhase`. It has no context file of its own.
+  `PlayerGameOverPayload`, …) and `PlayerPhase`. T7 added `QuestionType` incl. `map_pin`,
+  `MapPinConfig`, `MapPinAnswer`, `MapPinReveal`, `GameImagesPayload`, `ErrorPayload` (with
+  `code`), and `SyncStatePayload.imageIds`. It has no context file of its own.
 
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
-| `lib/` | `api.ts` REST wrapper (Bearer token from `localStorage.token`), `cn()`, `isTokenExpired()`. |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`) and the client-side `TimerBar`. |
+| `lib/` | `api.ts` REST wrapper (Bearer token from `localStorage.token`), `cn()`, `isTokenExpired()`, `mapPin.ts` (map geometry), `images.ts` (authenticated image loading with a one-shot refresh). |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the client-side `TimerBar`, and the map-pin canvas (`MapCanvas`, `MapPinCanvas`). |
 | `pages/` | Route components. `game/GameLayout.tsx` owns the socket and shares game state via `useGame()`. |
 
 ## How it fits together
@@ -31,6 +33,8 @@ persistent client state is in `localStorage`:
 - `token`: shared with the host and admin apps, see Gotchas.
 - `playerName` / `playerEmail`: guest pre-fill.
 - `sessionStorage.joinRoomCode`: survives the OAuth2 round trip.
+- `sessionStorage['buzzer:pin:{code}:{questionId}']`: an accepted map pin, so results can show
+  it after a reload (T7).
 
 In dev, Vite proxies `/api` and `/socket.io` to `localhost:8000`. In production, both are
 same-origin paths. The server side of every call below is described in
@@ -63,21 +67,27 @@ same-origin paths. The server side of every call below is described in
    **disconnected**. "Play Again" clears the token and goes to `/join`. `game_abandoned` goes
    straight to `/join`, and `host_disconnected` shows a banner.
 
+Map images are preloaded from `sync_state.imageIds` and `game_images` before the first map
+question, so the map is usually cached by the time it's needed.
+
 Answer payloads (`{selectedIndex}`, `{selectedValue: boolean}`, `{text}`,
-`{selectedIndices: number[]}`) match the keys `backend/app/services/game_service.calculate_score`
+`{selectedIndices: number[]}`, `{x, y}`) match the keys `backend/app/services/game_service.calculate_score`
 reads.
 
 ## Gotchas
 Most important cross-cutting issues. Details are in each subdirectory's file.
-- **One `error` event ends the game view.** Any server `error` (even a routine "Question is
-  locked" race) replaces the whole UI with a full-screen message until the next reconnect
-  (`pages/CLAUDE.md`).
+- **Errors without a `code` end the game view.** Since T7 the three late-answer rejections
+  (`error.code`) are non-fatal (banner + "not recorded"); any other server `error` replaces
+  the whole UI until the next reconnect (`pages/CLAUDE.md`).
 - **Token collision with the host/admin apps.** All three apps use `localStorage.token`, and in
   production they're served from `/player/`, `/host/`, and `/admin/` on what appears to be one
   origin. A signed-in host or admin is silently reused as the player, and "Play Again" logs them
   out.
-- **No token refresh.** The 2 h access token is never renewed (`/auth/refresh` is unused). A
-  socket reconnect after expiry is rejected (`lib/CLAUDE.md`).
+- **Token refresh only on image loads.** `lib/images.ts` refreshes once on a 401; nothing else
+  renews the 2 h access token, so a socket reconnect after expiry is rejected unless an image
+  load happened to refresh it (`lib/CLAUDE.md`).
+- **No test runner.** The map-pin canvas, pointer handling and the late-answer banner were
+  only type-checked and built, never exercised automatically. Check them by hand on a phone.
 - **Refresh/reconnect can strand the player.** State is only in React, and `sync_state` for an
   in-progress game doesn't navigate or restore the question or results. The server re-sends
   only an open, unlocked, unanswered question.
