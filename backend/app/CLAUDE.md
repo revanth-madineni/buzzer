@@ -8,8 +8,8 @@ over sockets; players join and answer over sockets.
 
 ## Contents
 Top-level files:
-- `main.py` — Builds the FastAPI `app`: CORS, slowapi, exception handlers, and the five routers
-  under `/api`. The lifespan connects Redis and runs `bootstrap_admin`. Exports **`asgi_app`**
+- `main.py` — Builds the FastAPI `app`: CORS, `BodySizeLimitMiddleware` (T7, see
+  `common/CLAUDE.md`), slowapi, exception handlers, and the six routers under `/api`. The lifespan connects Redis and runs `bootstrap_admin`. Exports **`asgi_app`**
   (`socketio.ASGIApp(sio, other_asgi_app=app)`), which is what must be served, not `app`.
 - `config.py` — `Settings` from env/`.env`: `APP_ENV`, `DATABASE_URL`, `REDIS_URL`, JWT keys,
   `CORS_ORIGINS`, `MAX_ROOMS` (50), `FRONTEND_URL`, `ADMIN_USERNAME/PASSWORD`,
@@ -18,16 +18,17 @@ Top-level files:
   handler returns, rolls back on exception).
 - `redis_client.py` — Lazy process-wide `get_redis()` (`decode_responses=True`) and
   `close_redis()`.
-- `migrations/` — Alembic (versions 001–004). Not covered by a context file.
+- `migrations/` — Alembic (versions 001–005; 005 adds `images`, T7). Not covered by a context
+  file.
 
 Subdirectories (each has its own `CLAUDE.md`, so read it before working there):
 | dir | role |
 |---|---|
 | `models/` | SQLAlchemy tables. A game belongs to at most one course (`Game.course_id`, nullable); each `GameSession` keeps the course it was played in, which can differ. |
 | `schemas/` | Pydantic request/response shapes and per-question-type structure validation. |
-| `common/` | Auth dependencies (global role only), exception types, logging, rate limiter. |
-| `services/` | Business logic: access checks, room lifecycle, scoring, Redis state, roster, exports. |
-| `routers/` | REST endpoints: `auth`, `admin` (all admin-only), `game` (host-facing), `host` (course-host management, T4), `health`. |
+| `common/` | Auth dependencies (global role only), exception types, logging, rate limiter, request body size limit. |
+| `services/` | Business logic: access checks, room lifecycle, scoring (incl. map pin, T7), Redis state, roster, images, exports. |
+| `routers/` | REST endpoints: `auth`, `admin` (all admin-only), `game` (host-facing), `host` (course-host management, T4), `images` (read an image by ID, any logged-in user, T7), `health`. |
 | `websocket/` | Socket.IO gateway: join/rejoin, phase state machine, answers, timers, disconnects. |
 
 ## How it fits together
@@ -54,7 +55,7 @@ own queries. Older endpoints still use layer 3 (ownership) only. Full tables are
 ### Where state lives
 | store | holds | lifetime |
 |---|---|---|
-| MySQL (`models/`) | users, courses, rosters, games, questions, `GameSession`, `SessionScore` (one row per answer) | durable; the source of truth for scores and leaderboards |
+| MySQL (`models/`) | users, courses, rosters, games, questions, `GameSession`, `SessionScore` (one row per answer), `images` (immutable bytes, T7) | durable; the source of truth for scores and leaderboards |
 | Redis `room:{code}` | status, `question_phase`, `question_index`, `question_ids`, lock/timer fields, `host_sid` | 90-min TTL, refreshed on socket activity |
 | Redis `session:{id}:*` | players (name, running score, connected), current question + `started_at`, answered sets, answer distributions | **no TTL** (see `services/CLAUDE.md`) |
 | gateway process memory | `_sid_ctx` (sid → user/role/room), question timer tasks, host-abandon tasks | per process; lost on restart |
@@ -136,6 +137,9 @@ Most important cross-cutting issues. Details and more are in each subdirectory's
   (`common/CLAUDE.md`).
 - **OAuth2 identity is a request header.** `X-Auth-Request-User` is trusted, which is safe only
   behind Traefik's OAuth2 middleware (`routers/CLAUDE.md`).
+- **`get_db` commits after the response is sent.** Every REST write handler commits itself
+  before returning, and new ones must (`docs/commit-race.md`). The socket gateway's `_db()`
+  has a related gap: `submit_answer` emits before its commit (`websocket/CLAUDE.md`).
 - **Error shape varies.** Clients see `{"error","message"}` from `BuzzerError`,
   `{"error":"VALIDATION_ERROR","detail":[…]}` from validation, and `{"detail": "..."}` from
   `HTTPException`. The player frontend only reads `detail`.
