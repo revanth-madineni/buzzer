@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from ..models.course import Course, CourseRoster, UserCourseAccess
 from ..models.game import Game, Question
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
+from ..schemas.admin import is_valid_number
 from ..schemas.game import ScoreResult
 from . import access_service as access
 from . import state_service as state
@@ -364,6 +366,148 @@ async def authorise_player(db: AsyncSession, user: User, session: GameSession) -
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Map pin (T7 spec §4.6). Every piece of map-pin geometry goes through these
+# helpers, so scoring, distributions, reveals, stats and the report agree.
+# ---------------------------------------------------------------------------
+
+MAP_PIN_GRID = 50
+
+
+def map_pin_click(answer: object) -> tuple[float, float] | None:
+    """(x, y) if `answer` is exactly {x, y} with valid numbers in [0, 1], else None."""
+    if not isinstance(answer, dict) or set(answer) != {"x", "y"}:
+        return None
+    x, y = answer["x"], answer["y"]
+    if not (is_valid_number(x) and is_valid_number(y)):
+        return None
+    if not (0 <= x <= 1 and 0 <= y <= 1):
+        return None
+    return float(x), float(y)
+
+
+def _map_pin_geometry(
+    config: dict, answer_data: dict
+) -> tuple[float, tuple[float, float], float, float] | None:
+    """(aspect, target, fullRadius, zeroRadius), or None for a malformed question."""
+    width, height = config.get("imageWidth"), config.get("imageHeight")
+    targets = answer_data.get("targets")
+    full, zero = answer_data.get("fullRadius"), answer_data.get("zeroRadius")
+    if not (is_valid_number(width) and is_valid_number(height)):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    if not isinstance(targets, list) or not targets:
+        return None
+    target = targets[0]
+    if not isinstance(target, dict):
+        return None
+    tx, ty = target.get("x"), target.get("y")
+    if not all(is_valid_number(v) for v in (tx, ty, full, zero)):
+        return None
+    return width / height, (float(tx), float(ty)), float(full), float(zero)
+
+
+def map_pin_distance(
+    aspect: float, target: tuple[float, float], click: tuple[float, float]
+) -> float:
+    """Distance in image-width units; `aspect` = imageWidth / imageHeight."""
+    dx = click[0] - target[0]
+    dy = (click[1] - target[1]) / aspect  # height fractions → width units
+    return math.hypot(dx, dy)
+
+
+def map_pin_fraction(d: float, full_radius: float, zero_radius: float) -> float:
+    """1 within fullRadius, linear falloff to 0 at zeroRadius."""
+    if d <= full_radius:
+        return 1.0
+    if d >= zero_radius:
+        return 0.0
+    return 1 - (d - full_radius) / (zero_radius - full_radius)
+
+
+def map_pin_bucket(x: float, y: float) -> str:
+    """Distribution key "bx,by" on a 50×50 grid. x = 1.0 lands in bucket 49."""
+    bx = min(MAP_PIN_GRID - 1, math.floor(x * MAP_PIN_GRID))
+    by = min(MAP_PIN_GRID - 1, math.floor(y * MAP_PIN_GRID))
+    return f"{bx},{by}"
+
+
+def map_pin_reveal(grading_type: str, config: dict, answer_data: dict) -> dict:
+    """The one map-pin reveal, for both grading types (spec §4.6). Answers' targets
+    are only revealed after the question closes; never put them in `config`."""
+    targets = answer_data.get("targets") or [{}]
+    target = targets[0] if isinstance(targets[0], dict) else {}
+    return {
+        "type": "map_pin",
+        "gradingType": grading_type,
+        "imageId": config.get("imageId"),
+        "imageWidth": config.get("imageWidth"),
+        "imageHeight": config.get("imageHeight"),
+        "target": {"x": target.get("x"), "y": target.get("y")},
+        "fullRadius": answer_data.get("fullRadius"),
+        "zeroRadius": answer_data.get("zeroRadius"),
+    }
+
+
+def map_pin_stats(config: dict, answer_data: dict, answers: list) -> dict:
+    """withinFullPct (0–100, 1 dp) and averageCredit (0–1, 3 dp), from geometry only,
+    so they mean the same under COMPLETENESS and with points_value 0. The denominator
+    is the answers with a valid {x, y}; both are None when there are none."""
+    geometry = _map_pin_geometry(config, answer_data)
+    clicks = [c for c in (map_pin_click(a) for a in answers) if c is not None]
+    if geometry is None or not clicks:
+        return {"withinFullPct": None, "averageCredit": None}
+    aspect, target, full, zero = geometry
+    distances = [map_pin_distance(aspect, target, c) for c in clicks]
+    within = sum(1 for d in distances if d <= full)
+    credit = sum(map_pin_fraction(d, full, zero) for d in distances)
+    return {
+        "withinFullPct": round(100 * within / len(clicks), 1),
+        "averageCredit": round(credit / len(clicks), 3),
+    }
+
+
+def game_image_ids(questions: list[Question]) -> list[str]:
+    """Distinct map_pin image IDs, in question order (for preloading on phones)."""
+    ids: list[str] = []
+    for q in questions:
+        if q.type == "map_pin":
+            image_id = (q.config or {}).get("imageId")
+            if isinstance(image_id, str) and image_id not in ids:
+                ids.append(image_id)
+    return ids
+
+
+async def get_game_image_ids(db: AsyncSession, game_id: int) -> list[str]:
+    result = await db.execute(
+        select(Question)
+        .where(Question.game_id == game_id)
+        .order_by(Question.order_index)
+    )
+    return game_image_ids(list(result.scalars().all()))
+
+
+def _score_map_pin(question: Question, answer_data: dict) -> ScoreResult:
+    """ACCURACY map_pin. Defensive: reachable from tests, seed scripts and direct
+    inserts that skip validation, so bad data scores 0 instead of raising."""
+    geometry = _map_pin_geometry(question.config or {}, question.answer_data or {})
+    if geometry is None:
+        logger.warning("map_pin_bad_question", question_id=question.id)
+        return ScoreResult(points_awarded=0, is_correct=False)
+    click = map_pin_click(answer_data)
+    if click is None:
+        logger.warning("map_pin_bad_answer", question_id=question.id)
+        return ScoreResult(points_awarded=0, is_correct=False)
+    aspect, target, full, zero = geometry
+    d = map_pin_distance(aspect, target, click)
+    frac = map_pin_fraction(d, full, zero)
+    return ScoreResult(
+        points_awarded=round(question.points_value * frac, 2),
+        is_correct=d <= full,
+    )
+
+
 def calculate_score(question: Question, answer_data: dict) -> ScoreResult:
     """
     Calculate points for a player's answer.
@@ -377,6 +521,9 @@ def calculate_score(question: Question, answer_data: dict) -> ScoreResult:
         return ScoreResult(points_awarded=question.points_value, is_correct=True)
 
     # ACCURACY
+    if question.type == "map_pin":
+        return _score_map_pin(question, answer_data)
+
     if question.type == "multiple_choice":
         selected = answer_data.get("selectedIndex")
         if selected is None:
@@ -487,6 +634,10 @@ async def record_answer(
         text = " ".join((answer_data.get("text") or "").lower().split())
         if text:
             dist_key = text
+    elif question.type == "map_pin":
+        click = map_pin_click(answer_data)
+        if click is not None:
+            dist_key = map_pin_bucket(*click)
     elif question.type == "multi_select":
         indices = answer_data.get("selectedIndices")
         if isinstance(indices, list):
@@ -562,8 +713,10 @@ async def get_player_question_summary(
         q_ans = r.q_answer_data or {}
         pts_val = r.points_value
 
-        if grading_type == "COMPLETENESS":
-            reveal: dict = {"type": "completeness"}
+        if q_type == "map_pin":
+            reveal: dict = map_pin_reveal(grading_type, r.config or {}, q_ans)
+        elif grading_type == "COMPLETENESS":
+            reveal = {"type": "completeness"}
         elif q_type == "multiple_choice":
             pts = q_ans.get("answer_points", [])
             correct_indices = [i for i, p in enumerate(pts) if p >= pts_val]
@@ -672,8 +825,10 @@ async def get_host_question_summary(
         pts_val = q["points_value"]
         grading_type = q["grading_type"]
 
-        if grading_type == "COMPLETENESS":
-            reveal: dict = {"type": "completeness"}
+        if q_type == "map_pin":
+            reveal: dict = map_pin_reveal(grading_type, q["config"], q_ans)
+        elif grading_type == "COMPLETENESS":
+            reveal = {"type": "completeness"}
         elif q_type == "multiple_choice":
             pts_list = q_ans.get("answer_points", [])
             reveal = {
@@ -721,6 +876,11 @@ async def get_host_question_summary(
                     text = (ans.get("text") or "").strip().lower()
                     if text:
                         dist[text] = dist.get(text, 0) + 1
+                elif q_type == "map_pin":
+                    click = map_pin_click(ans)
+                    if click is not None:
+                        k = map_pin_bucket(*click)
+                        dist[k] = dist.get(k, 0) + 1
                 elif q_type == "multi_select":
                     indices = ans.get("selectedIndices")
                     if isinstance(indices, list):
@@ -734,24 +894,25 @@ async def get_host_question_summary(
                 total_time += s["answer_time_ms"]
                 time_count += 1
 
-        result.append(
-            {
-                "questionId": qid,
-                "questionNumber": qnum,
-                "prompt": q["prompt"],
-                "type": q_type,
-                "gradingType": grading_type,
-                "config": q["config"],
-                "pointsValue": pts_val,
-                "answerReveal": reveal,
-                "answerDistribution": dist,
-                "totalAnswered": len(scores),
-                "totalPlayers": total_players,
-                "correctCount": correct_count,
-                "avgAnswerTimeMs": round(total_time / time_count)
-                if time_count
-                else None,
-            }
-        )
+        entry = {
+            "questionId": qid,
+            "questionNumber": qnum,
+            "prompt": q["prompt"],
+            "type": q_type,
+            "gradingType": grading_type,
+            "config": q["config"],
+            "pointsValue": pts_val,
+            "answerReveal": reveal,
+            "answerDistribution": dist,
+            "totalAnswered": len(scores),
+            "totalPlayers": total_players,
+            "correctCount": correct_count,
+            "avgAnswerTimeMs": round(total_time / time_count) if time_count else None,
+        }
+        if q_type == "map_pin":
+            entry.update(
+                map_pin_stats(q["config"], q_ans, [s["player_answer"] for s in scores])
+            )
+        result.append(entry)
 
     return result

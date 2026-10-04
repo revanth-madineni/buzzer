@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.course import Course
 from ..models.game import Game, Question
 from ..models.session import GameSession, SessionScore
+from .game_service import map_pin_reveal
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,8 @@ def _levenshtein(a: str, b: str) -> int:
 
 def _answer_reveal(q: Question) -> dict:
     """Mirror of gateway._answer_reveal — derive correct-answer facts from answer_data."""
+    if q.type == "map_pin":  # before COMPLETENESS: both grading types get the map
+        return map_pin_reveal(q.grading_type, q.config or {}, q.answer_data or {})
     if q.grading_type == "COMPLETENESS":
         return {"type": "completeness"}
     if q.type == "multiple_choice":
