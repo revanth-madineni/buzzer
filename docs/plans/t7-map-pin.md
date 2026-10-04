@@ -165,7 +165,11 @@ The steps run in this order:
    An `info` key or chunk that isn't in the allowlist is treated as metadata, so an unknown one
    leads to a re-encode rather than a leak. WebP is checked from its chunks because Pillow puts
    container fields (`loop`, `background`, `timestamp`, `duration`) in `info` for **every**
-   WebP, including its own clean output, so an `info` allowlist would never pass. Re-encode
+   WebP, including its own clean output, so an `info` allowlist would never pass.
+   **Trailing data is metadata** for every format: bytes after the JPEG `EOI` marker, after
+   the PNG `IEND` chunk, or outside the WebP RIFF length (or a chunk walk that doesn't end
+   exactly at the end of the file) set `has_metadata`, so a bundle can't smuggle data past
+   the end of an image. Pillow's output ends cleanly, so the invariant below holds. Re-encode
    when `force_reencode` is true or `has_metadata` is true. Otherwise keep `raw` as-is.
 8. **Re-encode** (only when step 7 says so):
    - **Rotate first.** Apply `ImageOps.exif_transpose` so phone photos stay upright. Rotation
@@ -214,8 +218,10 @@ Functions:
 - **Both POSTs:**
   - Decorate with `@limiter.limit("30/minute")`. slowapi requires the handler to take a
     `request: Request` parameter (see `routers/auth.py` `login`).
-  - Call `image_service.store_image` with `await file.read()`. The request's `get_db`
-    commits.
+  - Call `image_service.store_image` with `await file.read()`, then **`await db.commit()`
+    explicitly before returning**. `get_db`'s own commit runs only after the response has
+    been sent (FastAPI request-scoped `yield` dependencies), so without it a client that
+    GETs the image right after the 201 can get a 404.
   - The 2 MB check in `prepare_image` is the authoritative per-file rule. Checking size
     inside the handler cannot prevent buffering, because Starlette has already spooled the
     whole multipart body by then. Request size is bounded **before** parsing by the body
@@ -251,7 +257,7 @@ body is parsed before dependencies run. Instead:
   is what stops a 1 GB upload.
 
 Schema `ImageResponse` (in `schemas/admin.py`, reused by host): `id`, `mime_type`, `width`,
-`height`, `byte_size`. Never the data.
+`height`, `byte_size`, `sha256`. Never the data.
 
 **Access decision:** the GET has no course check. Anyone who knows an ID can read the image.
 Security comes from IDs being unguessable UUIDs and from having no listing. This is acceptable
@@ -708,7 +714,7 @@ Against the live stack, following `conftest.py`. Each item is one test:
      The GET bytes have no EXIF (re-open with Pillow: `getexif()` is empty, and there's no
      `exif` in `info`).
    - The stored `width`/`height` are 200×400 (rotated upright).
-   - `byte_size` and `sha256` match the returned bytes.
+   - `byte_size` and `sha256` in the upload response match the returned bytes.
    - A PNG with a `tEXt` chunk comes back without it.
    - A JPEG with an ICC profile keeps it.
    - A JPEG with only a Photoshop APP13 (IPTC) segment comes back without it.
@@ -956,3 +962,8 @@ Per `.claude/rules/context-sync.md`, update:
   - MPO (multi-image JPEG from phones) is accepted as `image/jpeg`, skips the animation check,
     and is always re-encoded.
   - Status line updated.
+- 2026-10-04 — Step 1 implementation fixes:
+  - Upload handlers commit explicitly before responding (`get_db` commits after the response
+    is sent, so an immediate GET raced the commit and 404'd).
+  - Trailing data after the end of an image counts as metadata.
+  - `ImageResponse` includes `sha256`.
