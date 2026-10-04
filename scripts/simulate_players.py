@@ -21,6 +21,8 @@ All question types are handled automatically:
   fill_in_the_blank — random word from --fitb-words; if --game-json supplied,
                       correct answers are drawn from acceptedAnswers and wrong
                       answers from --fitb-words
+  map_pin           — random {x, y} tap on the image; if --game-json supplied,
+                      accurate players tap near the target
 
 Usage:
     # Basic — 20 players, default profile mix, default FITB word pool
@@ -258,6 +260,16 @@ class SimPlayer:
             k = random.randint(1, n)
             return {"selectedIndices": sorted(random.sample(range(n), k))}
 
+        if q_type == "map_pin":
+            targets = (jq or {}).get("answer_data", {}).get("targets") or []
+            if targets and random.random() < p.accuracy:
+                t = targets[0]
+                return {
+                    "x": min(1.0, max(0.0, t["x"] + random.gauss(0, 0.03))),
+                    "y": min(1.0, max(0.0, t["y"] + random.gauss(0, 0.03))),
+                }
+            return {"x": random.random(), "y": random.random()}
+
         return None  # unknown type
 
     def _answer_str(self, answer: dict) -> str:
@@ -269,6 +281,8 @@ class SimPlayer:
             return f"options {answer['selectedIndices']}"
         if "selectedValue" in answer:
             return str(answer["selectedValue"])
+        if "x" in answer and "y" in answer:
+            return f"pin ({answer['x']:.2f}, {answer['y']:.2f})"
         return repr(answer)
 
     # ── per-question handler ──────────────────────────────────────────────────
