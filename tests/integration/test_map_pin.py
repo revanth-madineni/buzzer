@@ -313,7 +313,7 @@ def test_jpeg_photoshop_app13_removed(t4: T4World):
 def test_sample_us_map_uploads_under_limit(t4: T4World):
     meta = upload_ok(t4, US_MAP.read_bytes())
     assert meta["mime_type"] == "image/png"
-    assert (meta["width"], meta["height"]) == (3600, 3600)
+    assert (meta["width"], meta["height"]) == Image.open(US_MAP).size
     assert meta["byte_size"] <= 2 * 1024 * 1024
 
 
