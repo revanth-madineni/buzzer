@@ -11,8 +11,9 @@ into `services/`. Live gameplay is **not** here — it runs over Socket.IO in `w
 - `auth.py` — `/api/auth/*`: login, OAuth2 callback, temp-token exchange, guest join, refresh,
   logout. Sets the `refresh_token` cookie (httponly, `samesite=lax`, `path=/api/auth`, secure
   outside development).
-- `admin.py` — `/api/admin/*`: 37 endpoints for courses, rosters, games, questions, game
-  import/export, local users, access grants, guest merge, and session export/report.
+- `admin.py` — `/api/admin/*`: 38 endpoints for courses, rosters, games, questions, game
+  import/export, image upload, local users, access grants, guest merge, and session
+  export/report.
   **Every one** depends on `require_admin`. T4 added:
   - `POST /admin/games/{id}/move` (assign/move with a `confirm` step that drops grants which
     would stop working);
@@ -21,18 +22,23 @@ into `services/`. Live gameplay is **not** here — it runs over Socket.IO in `w
     carry one);
   - `restricted` on game update, and `allow_guests` on course create/update.
   Question endpoints are thin wrappers over `services/question_service.py`.
+  T7 added `POST /admin/images` and bundle version 2 for game import/export (below).
 - `host.py` — `/api/host/*` (T4): course-host management. Every endpoint uses a
   `require_*_host` dependency (see the table below), and URLs are flat (`/host/games/{id}`,
   not nested under a course).
 - `game.py` — `/api/game/*`: host resource discovery, room creation, room lookup, and
   per-session host tools (delete, guest list/merge, CSV export).
+- `images.py` (T7) — `GET /api/images/{image_id}`: the raw bytes of an uploaded image, for
+  any authenticated user. No list, update or delete endpoints in v1.
 
 ## How it fits in
 `main.py` includes these routers, then wraps the FastAPI app in a Socket.IO ASGI app so
 `/socket.io/*` goes to `websocket/gateway.py`. Request/response shapes come from `schemas/`
 (`admin.py` ↔ `schemas/admin.py`, etc.). The DB session comes from `database.get_db`, which
-**commits after the handler returns** (rolls back on exception). Handlers that don't call
-`db.commit()` themselves rely on that.
+**commits after the handler returns** (rolls back on exception). That commit runs **after
+the response has been sent**, so a client reading right after a write could see stale data.
+Every write handler therefore calls `await db.commit()` itself before returning; new write
+handlers must too (`docs/commit-race.md`).
 
 ### Endpoint access map
 Global roles from `common/` (`ADMIN | USER | GUEST`); course/game rules come from
@@ -55,6 +61,7 @@ Global roles from `common/` (`ADMIN | USER | GUEST`); course/game rules come fro
 | `GET/POST /host/games/{gid}/questions`, `POST …/reorder` | `require_game_host` | `question_service` |
 | `PUT/DELETE /host/games/{gid}/questions/{qid}` | `require_question_host` | 404 if the question isn't in that game |
 | `GET/POST /host/courses/{cid}/roster` | `require_course_host` | Canvas gradebook CSV only; `mode` `add_update` (default) or `replace` |
+| `POST /host/courses/{cid}/images` (T7) | `require_course_host` | multipart `file` → 201 `ImageResponse`; stores `course_id` from the URL; 30/min |
 | `GET /host/courses/{cid}/sessions?status=` | `require_course_host` | sessions **played in** the course, any host; restricted games without a grant filtered in SQL |
 | `GET /host/sessions/{sid}/export`, `…/report` | `require_session_host` | CSV / HTML; 409 `SESSION_NOT_COMPLETED` unless COMPLETED |
 
@@ -72,7 +79,11 @@ Global roles from `common/` (`ADMIN | USER | GUEST`); course/game rules come fro
 | `GET /game/sessions/{id}/export` | ADMIN or session host. Raw CSV only (no Canvas format). |
 
 **Any authenticated user, including GUEST** (`get_current_user`):
-`GET /game/rooms/{code}`, which returns session/game/course metadata for any room code.
+- `GET /game/rooms/{code}`, which returns session/game/course metadata for any room code.
+- `GET /images/{image_id}` (T7): 404 `NOT_FOUND` for unknown or malformed IDs; else the bytes
+  with the stored `Content-Type`, `Cache-Control: private, max-age=31536000, immutable`,
+  `nosniff`, `inline`. **No course check**: security rests on random UUIDs and having no
+  list endpoint, and the image is shown to every player of the question anyway.
 
 **Public (no auth):** `GET /health`, `GET /game/rooms/{code}/ping`, and all of `/auth/*`
 (except that `/auth/exchange-temp` and `/auth/refresh` need a valid temp/refresh token).
@@ -85,6 +96,23 @@ Three kinds of host checks exist:
   still manage their old sessions there.
 - `/host/sessions/{id}/export|report` check **course HOST** on the session's course instead,
   so any co-host can download results, but a host who lost HOST cannot.
+
+### Images and bundles (T7)
+- **Upload** (`POST /admin/images` with optional `course_id` form field, 404 if missing;
+  `POST /host/courses/{cid}/images`): `@limiter.limit("30/minute")`, so the handler takes
+  `request: Request`. Calls `image_service.store_image` (always re-encoded). No live-game
+  guard, since it writes no game or question. Request size is bounded before parsing by
+  `common/body_limit.py` (2.5 MB); `prepare_image`'s 2 MB is the per-file rule.
+- **Export** writes `"version": 2` with `images: [{id, mime_type, data(base64)}]`, each
+  distinct map-pin image once; questions keep their source `imageId`. 409
+  `EXPORT_IMAGE_MISSING` if an image row is gone.
+- **Import** reads v1 and v2 (body limit 26 MB, then a 25 MB check → 422). Before any insert:
+  v1 may not contain `images`; v2 has at most 50 entries with unique string ids (any string,
+  e.g. `"map1"`; extra keys ignored); every map_pin question must reference a bundle image
+  (server images aren't allowed, so bundles stay self-contained); only referenced images are
+  base64-decoded and run through `prepare_image(force_reencode=False)`. Then, in one
+  transaction: images get new UUIDs, questions are re-pointed and take their dimensions from
+  the prepared images (import doesn't call `resolve_map_pin_image`).
 
 ### Auth flows (`auth.py`)
 - `POST /auth/login` (5 per 15 min): `username`+`password` → access token + refresh cookie.
@@ -132,7 +160,8 @@ Three kinds of host checks exist:
 - `health.py` counts players at `room:{code}:players`, but players live at
   `session:{id}:players` (see `services/state_service.py`), so `activePlayers` is always 0.
   It uses `KEYS room:*` and counts completed rooms still in Redis as active.
-- Question `PUT` (admin and host) doesn't re-validate the whole question's structure (see
+- Question `PUT` (admin and host) re-validates the whole merged question since T7, so a PUT
+  to an already-invalid question returns 422 even for a prompt-only change (see
   `schemas/CLAUDE.md`).
 - **Live games are locked.** These writes return 409 `GAME_LIVE` while the game has an
   IN_PROGRESS session with a Redis room (see `services/CLAUDE.md`):
