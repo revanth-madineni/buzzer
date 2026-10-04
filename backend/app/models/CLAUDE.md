@@ -3,11 +3,12 @@
 ## Purpose
 SQLAlchemy 2.0 ORM models (typed `Mapped[...]` style) for every persistent table. All models
 subclass `Base` from `app/database.py`. Schema changes go through Alembic in
-`app/migrations/versions/` (currently 001–004), which is kept in step with these files.
+`app/migrations/versions/` (currently 001–005), which is kept in step with these files.
 
 ## Contents
 - `__init__.py` — Re-exports all models. Import order matters: FK targets are imported before
-  the tables that reference them (User → Course → Game → Session).
+  the tables that reference them (User → Course → Image → Game → Session). The block is
+  deliberately not alphabetical, so ruff's I001 on it is expected.
 - `user.py` — `User`: UUID string PK, optional `netid` / `email` / `username` (all unique,
   nullable), `password_hash`, and a **global** `role` enum `ADMIN | USER | GUEST` (default `USER`).
 - `course.py` — `Course` (name + semester, `allow_guests` bool default true, `games`
@@ -23,6 +24,16 @@ subclass `Base` from `app/database.py`. Schema changes go through Alembic in
   `game_id`, `course_id`, nullable `host_user_id`, status `LOBBY | IN_PROGRESS | COMPLETED |
   ABANDONED`) and `SessionScore` (one row per scored answer: session, user, question,
   `points_awarded` float, `answer_time_ms`, `is_correct`, raw `answer_data` JSON).
+- `image.py` (T7, migration 005) — `Image`: uploaded images for map-pin questions.
+  - `id` is a random `uuid4` string set in Python (IDs are unguessable because any logged-in
+    user can read an image by ID).
+  - `mime_type` (`image/png | image/jpeg | image/webp`, from the decoded format), `width`,
+    `height`, `byte_size`, `sha256` (indexed, **not** unique; for future dedupe).
+  - `data` is `MEDIUMBLOB` on MySQL (plain `BLOB` caps at 64 KB) and `deferred`, so metadata
+    queries never load the bytes. Use `image_service.get_image_with_data` when you need them.
+  - `uploaded_by_user_id` → `users.id` and `course_id` → `courses.id`, both nullable with
+    `ON DELETE SET NULL`. Audit only, not access rules. No relationships are declared on
+    `User` or `Course`, so there's no cascade.
 
 ## How it fits in
 The data layer under `services/` (business logic) and `routers/` (HTTP). `schemas/` holds the
@@ -76,6 +87,14 @@ per-user `UserGameAccess` grants alone, and ignores `course_id`, `restricted` an
 - `GameSession.host_user_id` is nullable — don't assume every session has a host user.
 - `Question.type` is an unconstrained string (not an enum); valid values are defined by the
   question-type handling in `services/`, not here.
+- **Images are immutable.** Nothing edits or replaces an `Image` row, and v1 has no delete.
+  map_pin questions copy the image's `width`/`height` into their `config` and store targets
+  as fractions of the image, which is only safe because the bytes never change. "Replace an
+  image" means upload a new one and re-point the question.
+- **No FK from questions to images.** A map_pin question references its image by
+  `config.imageId` inside JSON, so the DB can't stop an image row from going missing.
+  Export returns 409 `EXPORT_IMAGE_MISSING` if one does; a future delete (T8) must search
+  `config` first.
 - `CourseRoster` is keyed by `netid`, not by `users.id` — roster rows exist independently of
   `User` accounts and are not FKs to them.
 - `game.py`'s `TYPE_CHECKING` block imports `UserGameAccess` from `.user`, but it is defined in
