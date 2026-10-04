@@ -21,6 +21,10 @@ from the ORM classes in `models/` — response schemas use `from_attributes=True
   - Questions: `QuestionCreate` (with a `model_validator` enforcing per-type structure),
     `QuestionUpdate`, `QuestionResponse` (**includes `answer_data` and `grading_type`**),
     `QuestionReorder` (`order` = full list of question IDs in the new order).
+    `QUESTION_TYPE_PATTERN` is shared by create and update, and `is_valid_number` (int or
+    float, not `bool`, finite) is also used by `services/game_service`'s map-pin helpers.
+  - Images (T7): `ImageResponse` (`id`, `mime_type`, `width`, `height`, `byte_size`,
+    `sha256`; never the bytes). Used by both upload endpoints.
   - Users: `UserCreate` (local account; username lowercased, `^[a-zA-Z0-9_-]+$`, password 8–72
     chars), `UserUpdate` (can set `role` to `USER | ADMIN`), `UserResponse`.
   - Access grants: `CourseAccessGrant` (`course_id` + role `HOST | PLAYER`), `GameAccessGrant`
@@ -55,25 +59,30 @@ own `course_id` (see `models/CLAUDE.md`). `RoomCreateRequest` still takes a `cou
 that the two must match (T4 spec §4.4) is enforced in `services/`, not here.
 
 ### Question structure rules (`QuestionCreate.validate_structure`)
-`type` ∈ `multiple_choice | true_false | fill_in_the_blank | multi_select`;
+`type` ∈ `multiple_choice | true_false | fill_in_the_blank | multi_select | map_pin`;
 `grading_type` ∈ `ACCURACY | COMPLETENESS`.
 
-| type | `config` | `answer_data` (ACCURACY only) |
+| type | `config` | `answer_data` (ACCURACY only, except map_pin) |
 |---|---|---|
 | multiple_choice | `options`: list, ≥2 | `answer_points`: list, len = options, each ≥ 0 |
 | true_false | not checked | `answer_points`: dict with exactly keys `"true"`, `"false"` |
 | fill_in_the_blank | not checked | `acceptedAnswers`: non-empty list of non-blank strings; `answerPoints`: list, len = acceptedAnswers, each ≥ 0; optional `editDistance`: int ≥ 0 |
 | multi_select | `options`: list, ≥2 | `answer_points`: list, len = options, numbers (**negatives allowed**) |
+| map_pin (T7) | exactly `imageId` (non-empty string ≤ 64; not required to be a UUID, so hand-made bundles can use `"map1"`) + optional `imageWidth`/`imageHeight` (positive ints, overwritten by the server) | **both grading types**: exactly `targets` (list of exactly 1 `{x, y}`, valid numbers in [0, 1]), `fullRadius` (≥ 0.02), `zeroRadius` (> fullRadius, ≤ 2). Radii are in image-width units. Unknown keys rejected everywhere. |
 
-`COMPLETENESS` questions have no `answer_data` requirements.
+Other `COMPLETENESS` questions have no `answer_data` requirements. map_pin needs the target
+under COMPLETENESS too, because both grading types show the same map reveal. Whether the
+image exists is checked in `services/question_service.resolve_map_pin_image` (422
+`IMAGE_NOT_FOUND`), not here.
 
 ## Gotchas
-- **`QuestionUpdate` has no structural validation.** Only per-field patterns/ranges are
-  checked, and `services/question_service.update_question` assigns non-null fields straight
-  onto the model. A PUT can change
-  `type`, `grading_type`, `config`, or `answer_data` independently and leave a question that
-  `QuestionCreate` would reject. Bulk game import does run each question through
-  `QuestionCreate`.
+- **`QuestionUpdate` is validated on the merged result (T7).** `QuestionUpdate` itself only
+  checks per-field patterns, but `services/question_service.update_question` overlays the
+  PUT's non-null fields on the existing question's seven content fields and runs
+  `QuestionCreate` on the result (422 `VALIDATION_ERROR`). `config` and `answer_data` are
+  replaced whole, not deep-merged. Consequence: a question that create would reject can't be
+  PUT at all, even for a prompt-only change, until it's made valid. `order_index` stays out
+  of the merge and is applied from the PUT as before.
 - **Answer leakage:** `QuestionResponse` (admin) exposes `answer_data`; anything sent to hosts'
   screens or players' phones must use `QuestionPublic` instead.
 - **Key naming is inconsistent inside `answer_data`:** `answer_points` (snake_case) for
