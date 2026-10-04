@@ -1284,3 +1284,63 @@ def test_import_unreferenced_bad_image_ignored(t4: T4World):
     r = import_bundle(t4, bundle)
     assert r.status_code == 201, r.text
     assert image_row_count() == before + 1  # only the referenced image is stored
+
+
+# ---------------------------------------------------------------------------
+# Report and CSV export (spec §4.13)
+# ---------------------------------------------------------------------------
+
+
+async def test_report_embeds_map_once_and_csv_has_points(t4: T4World):
+    img = upload_ok(t4, png((800, 400)))
+    course, game, _ = map_game(
+        t4,
+        [
+            map_pin_question(img["id"], prompt="Where is Denver?"),
+            t4_helpers.MC_QUESTION,
+            map_pin_question(img["id"], grading_type="COMPLETENESS"),
+        ],
+    )
+    live = await open_game(t4, course, game, 2)
+    try:
+        qid = await next_question(live)
+        taps = [{"x": 0.5, "y": 0.5}, {"x": 0.5 + D_MID, "y": 0.5}]
+        for p, tap in zip(live.players, taps):
+            assert (await submit(p, qid, tap))[0] == "answer_received"
+        await results(live)
+        await next_question(live)  # MC: nobody answers
+        await results(live)
+        qid = await next_question(live)
+        assert (await submit(live.players[0], qid, {"x": 0.1, "y": 0.1}))[0] == (
+            "answer_received"
+        )
+        await results(live)
+        await finish(live)
+    finally:
+        await live.close()
+
+    r = t4.request("GET", f"/admin/sessions/{live.session_id}/report")
+    assert r.status_code == 200, r.text
+    report = r.text
+    # The image is embedded once and used by both map questions.
+    assert report.count(f'id="mapimg-{img["id"]}"') == 1
+    assert report.count(f'href="#mapimg-{img["id"]}"') == 2
+    assert report.count('viewBox="0 0 800 400"') == 2
+    original = get_image(t4, img["id"]).content
+    assert f"data:image/png;base64,{b64(original)}" in report
+    assert "Map Pin" in report
+    # Q1: one within, one at 50% → 50% within, 75% average credit.
+    assert "50% within target" in report
+    assert "75% average credit" in report
+    # Heatmap dots for Q1's two cells ("25,25" and "29,25") and Q3's one.
+    assert report.count("<title>1</title>") == 3
+
+    r = t4.request(
+        "GET", f"/admin/sessions/{live.session_id}/export", params={"format": "raw"}
+    )
+    assert r.status_code == 200, r.text
+    rows = [line.split(",") for line in r.text.strip().splitlines()]
+    q1_points = sorted(float(row[1]) for row in rows[1:])
+    assert q1_points == [5.0, 10.0]
+    q3_points = sorted(float(row[3]) for row in rows[1:])
+    assert q3_points == [0.0, 10.0]  # COMPLETENESS: full points for answering

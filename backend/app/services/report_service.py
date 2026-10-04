@@ -9,7 +9,9 @@ Answer distributions are reconstructed from session_scores.answer_data in MySQL
 
 from __future__ import annotations
 
+import base64
 import html
+import math
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -19,8 +21,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.course import Course
 from ..models.game import Game, Question
+from ..models.image import Image
 from ..models.session import GameSession, SessionScore
-from .game_service import map_pin_reveal
+from . import image_service
+from .game_service import (
+    MAP_PIN_GRID,
+    map_pin_bucket,
+    map_pin_click,
+    map_pin_reveal,
+    map_pin_stats,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +94,10 @@ def _extract_answer_key(q_type: str, answer_data: dict | None) -> str | None:
     if q_type == "fill_in_the_blank":
         text = answer_data.get("text", "").strip()
         return text.lower() if text else None
+    if q_type == "map_pin":
+        # The same bucket as the live distribution (game_service.map_pin_bucket).
+        click = map_pin_click(answer_data)
+        return map_pin_bucket(*click) if click else None
     return None
 
 
@@ -251,6 +265,80 @@ def _render_word_cloud(q: Question, dist: dict[str, int], reveal: dict) -> str:
     return "\n".join(parts)
 
 
+def _render_map_image_defs(images: dict[str, Image]) -> str:
+    """Each distinct map image once, as a data URI in a hidden SVG's <defs>.
+
+    The report is a standalone file and can't call the authenticated image GET, so
+    images are embedded; per-question SVGs reference them with <use>, so an image
+    shared by several questions is embedded only once (images are capped at 2 MB).
+    """
+    if not images:
+        return ""
+    defs = []
+    for image_id, image in images.items():
+        data = base64.b64encode(image.data).decode("ascii")
+        defs.append(
+            f'<image id="mapimg-{_esc(image_id)}" '
+            f'href="data:{_esc(image.mime_type)};base64,{data}" '
+            f'width="{image.width}" height="{image.height}"/>'
+        )
+    return (
+        '<svg width="0" height="0" style="position:absolute" aria-hidden="true">'
+        "<defs>" + "".join(defs) + "</defs></svg>"
+    )
+
+
+def _render_map_pin(reveal: dict, dist: dict[str, int], image: Image | None) -> str:
+    """One inline SVG per question, in image pixel coordinates: the image, heatmap
+    dots per 2% cell (area grows with count), then both radius circles and the
+    target. A radius r in width units is r × width pixels."""
+    if image is None:
+        return '<p class="wc-empty">Map image unavailable</p>'
+    w, h = image.width, image.height
+    parts = [
+        (
+            f'<svg class="map-svg" viewBox="0 0 {w} {h}" role="img" '
+            'aria-label="Map with answer heatmap and target">'
+        ),
+        f'<use href="#mapimg-{_esc(image.id)}"/>',
+    ]
+    cells = []
+    for key, count in dist.items():
+        bx, _, by = key.partition(",")
+        if bx.isdigit() and by.isdigit() and count > 0:
+            cells.append((int(bx), int(by), count))
+    max_count = max((c for _, _, c in cells), default=1)
+    for bx, by, count in cells:
+        cx = (bx + 0.5) / MAP_PIN_GRID * w
+        cy = (by + 0.5) / MAP_PIN_GRID * h
+        r = w * (0.006 + 0.02 * math.sqrt(count / max_count))
+        parts.append(
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{r:.1f}" '
+            f'fill="rgba(239,68,68,0.55)"><title>{count}</title></circle>'
+        )
+    target = reveal.get("target") or {}
+    tx, ty = target.get("x"), target.get("y")
+    full, zero = reveal.get("fullRadius"), reveal.get("zeroRadius")
+    if all(isinstance(v, (int, float)) for v in (tx, ty, full, zero)):
+        cx, cy, stroke = tx * w, ty * h, w * 0.003
+        parts.append(
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{zero * w:.1f}" fill="none" '
+            f'stroke="rgba(234,179,8,0.95)" stroke-width="{stroke:.1f}" '
+            f'stroke-dasharray="{stroke * 3:.1f} {stroke * 2.5:.1f}"/>'
+        )
+        parts.append(
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{full * w:.1f}" '
+            f'fill="rgba(34,197,94,0.25)" stroke="rgb(22,163,74)" '
+            f'stroke-width="{stroke:.1f}"/>'
+        )
+        parts.append(
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{max(stroke * 2, 3):.1f}" '
+            f'fill="rgb(22,163,74)" stroke="white" stroke-width="{stroke / 2:.1f}"/>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 def _render_histogram(buckets: list[dict]) -> str:
     max_count = max((b["count"] for b in buckets), default=0) or 1
     MAX_H = 160  # max bar height px
@@ -313,6 +401,8 @@ body{
 .badge-mc{background:#1e3a5f;color:#93c5fd}
 .badge-tf{background:#1a3a2a;color:#86efac}
 .badge-fitb{background:#3b2f1e;color:#fbbf24}
+.badge-map{background:#3b1e2a;color:#f9a8d4}
+.map-svg{display:block;width:100%;height:auto;max-height:640px;border-radius:12px;background:#0f172a}
 .badge-accuracy{background:#2e1b3d;color:#c084fc}
 .badge-completeness{background:#2d2d1a;color:#fde68a}
 .q-timing{margin-left:auto;color:#475569;font-size:0.78rem}
@@ -404,6 +494,15 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
     )
     all_scores = s_result.scalars().all()
 
+    # Map images, loaded once each with their bytes (images are immutable).
+    map_images: dict[str, Image] = {}
+    for q in questions:
+        image_id = (q.config or {}).get("imageId") if q.type == "map_pin" else None
+        if isinstance(image_id, str) and image_id not in map_images:
+            image = await image_service.get_image_with_data(db, image_id)
+            if image is not None:
+                map_images[image_id] = image
+
     # Group by question
     by_question: dict[int, list[SessionScore]] = defaultdict(list)
     for s in all_scores:
@@ -443,6 +542,7 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
             "multiple_choice": ("Multiple Choice", "badge-mc"),
             "true_false": ("True / False", "badge-tf"),
             "fill_in_the_blank": ("Fill in the Blank", "badge-fitb"),
+            "map_pin": ("Map Pin", "badge-map"),
         }.get(q.type, (q.type, ""))
         type_label, type_class = type_badge
 
@@ -456,10 +556,32 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
             chart = _render_bar_chart(q, dict(dist), reveal, total_players)
         elif q.type == "fill_in_the_blank":
             chart = _render_word_cloud(q, dict(dist), reveal)
+        elif q.type == "map_pin":
+            chart = _render_map_pin(
+                reveal, dict(dist), map_images.get((q.config or {}).get("imageId"))
+            )
         else:
             chart = ""
 
-        if is_accuracy and answered > 0:
+        if q.type == "map_pin":
+            # Geometry-based, so the same meaning under both grading types (§4.6).
+            mp = map_pin_stats(
+                q.config or {}, q.answer_data or {}, [s.answer_data for s in q_scores]
+            )
+            within = "—" if mp["withinFullPct"] is None else f"{mp['withinFullPct']:g}%"
+            credit = (
+                "—"
+                if mp["averageCredit"] is None
+                else f"{round(mp['averageCredit'] * 100):g}%"
+            )
+            stats = (
+                f'<div class="q-stats">'
+                f"{answered} / {total_players} answered"
+                f' · <span class="pct-correct">{within} within target</span>'
+                f" · {credit} average credit"
+                f"</div>"
+            )
+        elif is_accuracy and answered > 0:
             pct = round(correct_count / answered * 100)
             stats = (
                 f'<div class="q-stats">'
@@ -507,6 +629,7 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
 <style>{_CSS}</style>
 </head>
 <body>
+{_render_map_image_defs(map_images)}
 <div class="container">
 
 <div class="rpt-header">
