@@ -93,20 +93,27 @@ Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
 - **Error messages: fixed in host and admin, not in player.** The backend's `BuzzerError` sends
   `{error, message}`. The host and admin `lib/api.ts` read `message`, then a string `detail`,
   then "Invalid input" for validation arrays (T4). The player wrapper still reads only `detail`.
-- **No token refresh in any app.** The 2 h access token is never renewed, even though a 7-day
-  refresh cookie is set.
+- **Almost no token refresh.** The 2 h access token is renewed only by `lib/images.ts` (T7),
+  which calls `/api/auth/refresh` once when a map image load gets a 401. `api.ts` in every app
+  still has no refresh or 401 retry.
 - **Copy-pasted code instead of a shared package.** `lib/api.ts`, `lib/utils.ts`, and
   `components/ui/*` are duplicated. Host ≡ admin byte-for-byte (including `api.ts` since T4);
   the player's `api.ts` is older, and its `ui/*` are re-tuned for touch. Socket payload types in
   `host/src/types/` and `player/src/types/` are hand-written, already drift from the server, and
   hard-code event names from `backend/app/websocket/events.py`. A fix or a new question type
-  must be applied per app.
+  must be applied per app. T7's map-pin pieces are kept **byte-identical** on purpose across
+  all three apps: `lib/mapPin.ts`, `lib/images.ts`, `components/MapCanvas.tsx`. Edit one,
+  copy to the other two (a quick `md5` of the three copies should show one hash).
 - **Two question editors.** The host `pages/manage/QuestionEditorPage.tsx` is an adapted copy of
   the admin one (host endpoints, no JSON export). A form change must be made in both.
 - **Adding a question type** touches both `QuestionEditorPage`s (form + `answer_data` keys,
   which mix `answer_points` with fill-in-the-blank's camelCase), the host `QuestionPage` /
   `ResultsPage` / `GameOverPage`, the player `QuestionPage` / `ResultsPage` / `GameOverPage`,
-  both `types/game.ts`, and the backend scoring and reveal code.
+  both `types/game.ts`, and the backend scoring and reveal code. map_pin (T7) is the worked
+  example: see `docs/plans/t7-map-pin.md`.
+- **No frontend test runner.** None of the three apps can run tests, so the map-pin canvas,
+  pointer handling, image loading and the player's non-fatal late-answer handling were only
+  type-checked and built. Verify them by hand on a phone and a projector.
 - **`docker compose up` doesn't build the frontends.** nginx mounts `frontend/*/dist`
   read-only. Run `npm run build` first, and again after every frontend change; there's no hot
   reload through nginx. Use `npm run dev` for iterative work.
