@@ -9,13 +9,14 @@ over sockets; players join and answer over sockets.
 ## Contents
 Top-level files:
 - `main.py` — Builds the FastAPI `app`: CORS, `BodySizeLimitMiddleware` (T7, see
-  `common/CLAUDE.md`), slowapi, exception handlers, and the six routers under `/api`. The lifespan connects Redis and runs `bootstrap_admin`. Exports **`asgi_app`**
+  `common/CLAUDE.md`), slowapi, exception handlers, and the six routers under `/api`. The
+  lifespan connects Redis and runs `bootstrap_admin`. Exports **`asgi_app`**
   (`socketio.ASGIApp(sio, other_asgi_app=app)`), which is what must be served, not `app`.
 - `config.py` — `Settings` from env/`.env`: `APP_ENV`, `DATABASE_URL`, `REDIS_URL`, JWT keys,
   `CORS_ORIGINS`, `MAX_ROOMS` (50), `FRONTEND_URL`, `ADMIN_USERNAME/PASSWORD`,
   `STRESS_TEST_KEY`. Helpers: `is_development`, `is_stress_test_mode`.
 - `database.py` — Async engine, `AsyncSessionLocal`, `Base`, and `get_db` (commits after the
-  handler returns, rolls back on exception).
+  handler returns **and after the response is sent**, rolls back on exception).
 - `redis_client.py` — Lazy process-wide `get_redis()` (`decode_responses=True`) and
   `close_redis()`.
 - `migrations/` — Alembic (versions 001–005; 005 adds `images`, T7). Not covered by a context
