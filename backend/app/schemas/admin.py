@@ -240,6 +240,21 @@ class QuestionReorder(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Images (T7). Never includes the bytes; those come from GET /api/images/{id}.
+# ---------------------------------------------------------------------------
+
+
+class ImageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    mime_type: str
+    width: int
+    height: int
+    byte_size: int
+    sha256: str
+
+
+# ---------------------------------------------------------------------------
 # Users (local accounts)
 # ---------------------------------------------------------------------------
 

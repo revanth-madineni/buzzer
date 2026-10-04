@@ -6,7 +6,16 @@ import uuid
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import Response, StreamingResponse
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select
@@ -14,9 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..common.dependencies import require_admin
 from ..common.exceptions import ConflictError, NotFoundError
+from ..common.rate_limit import limiter
 from ..database import get_db
 from ..models.course import Course, CourseRoster, UserCourseAccess
 from ..models.game import Game, Question, UserGameAccess
+from ..models.image import Image
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
 from ..redis_client import get_redis
@@ -35,6 +46,7 @@ from ..schemas.admin import (
     GameMoveResult,
     GameResponse,
     GameUpdate,
+    ImageResponse,
     QuestionCreate,
     QuestionReorder,
     QuestionResponse,
@@ -49,7 +61,7 @@ from ..schemas.admin import (
     UserWithAccessResponse,
 )
 from ..services import access_service as access
-from ..services import game_service, question_service
+from ..services import game_service, image_service, question_service
 from ..services.auth_service import hash_password
 from ..services.export_service import build_canvas_csv, build_session_csv
 from ..services.report_service import build_session_report
@@ -604,6 +616,31 @@ async def import_game(
         question_count=len(validated_questions),
     )
     return {"game_id": game.id}
+
+
+# ---------------------------------------------------------------------------
+# Images (T7). Upload only; reading is GET /api/images/{id} (routers/images.py).
+# No live-game guard: an upload writes no game or question.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/images", response_model=ImageResponse, status_code=201)
+@limiter.limit("30/minute")
+async def upload_image(
+    request: Request,
+    file: Annotated[UploadFile, File(description="PNG, JPEG or WebP, at most 2 MB")],
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    course_id: Annotated[int | None, Form()] = None,
+) -> Image:
+    if course_id is not None and not await db.get(Course, course_id):
+        raise NotFoundError(f"Course {course_id} not found")
+    image = await image_service.store_image(db, await file.read(), admin, course_id)
+    # Commit before responding: get_db's commit runs after the response is sent, so a
+    # client that GETs the image right after the 201 could otherwise get a 404.
+    await db.commit()
+    logger.info("admin_image_uploaded", image_id=image.id, user_id=admin.id)
+    return image
 
 
 # ---------------------------------------------------------------------------

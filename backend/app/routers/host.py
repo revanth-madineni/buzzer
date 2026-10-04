@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 import structlog
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import Response
 from redis.asyncio import Redis
 from sqlalchemy import delete, exists, func, select
@@ -25,14 +25,17 @@ from ..common.dependencies import (
     require_user,
 )
 from ..common.exceptions import BuzzerError
+from ..common.rate_limit import limiter
 from ..database import get_db
 from ..models.course import Course, CourseRoster
 from ..models.game import Game, Question
+from ..models.image import Image
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
 from ..redis_client import get_redis
 from ..schemas.admin import (
     GameResponse,
+    ImageResponse,
     QuestionCreate,
     QuestionReorder,
     QuestionResponse,
@@ -48,7 +51,7 @@ from ..schemas.host import (
     SessionListItem,
 )
 from ..services import access_service as access
-from ..services import game_service, question_service
+from ..services import game_service, image_service, question_service
 from ..services import state_service as state
 from ..services.export_service import build_session_csv
 from ..services.report_service import build_session_report
@@ -297,6 +300,33 @@ async def upload_roster(
     result = await process_roster_csv(db, course.id, await file.read(), mode)
     logger.info("host_roster_uploaded", course_id=course.id, user_id=user.id, mode=mode)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Images (T7). Stored against the course in the URL. No live-game guard: an upload
+# writes no game or question.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/courses/{course_id}/images", response_model=ImageResponse, status_code=201
+)
+@limiter.limit("30/minute")
+async def upload_image(
+    request: Request,
+    file: Annotated[UploadFile, File(description="PNG, JPEG or WebP, at most 2 MB")],
+    course: Annotated[Course, Depends(require_course_host)],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Image:
+    image = await image_service.store_image(db, await file.read(), user, course.id)
+    # Commit before responding: get_db's commit runs after the response is sent, so a
+    # client that GETs the image right after the 201 could otherwise get a 404.
+    await db.commit()
+    logger.info(
+        "host_image_uploaded", image_id=image.id, course_id=course.id, user_id=user.id
+    )
+    return image
 
 
 # ---------------------------------------------------------------------------
