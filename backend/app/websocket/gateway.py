@@ -106,6 +106,9 @@ def _question_payload(q: Question, number: int, total: int) -> dict:
         "type": q.type,
         "gradingType": q.grading_type,
         "prompt": q.prompt,
+        # INVARIANT: `config` is public (map_pin's imageId + dimensions go to every
+        # phone). Nothing secret may ever be put in `config`; answers live in
+        # answer_data, which is never sent.
         "config": q.config,
         "timeLimitSeconds": q.time_limit_seconds,
         "pointsValue": q.points_value,
@@ -139,6 +142,10 @@ def _answer_reveal(q: Question) -> dict:
     Derive a client-safe correct-answer reveal from answer_data.
     answer_data is NEVER forwarded directly — only derived facts are sent.
     """
+    if q.type == "map_pin":  # before COMPLETENESS: both grading types get the map
+        return game_service.map_pin_reveal(
+            q.grading_type, q.config or {}, q.answer_data or {}
+        )
     if q.grading_type == "COMPLETENESS":
         return {"type": "completeness"}
     if q.type == "multiple_choice":
@@ -163,8 +170,22 @@ def _answer_reveal(q: Question) -> dict:
     return {}
 
 
-async def _emit_error(sid: str, message: str) -> None:
-    await sio.emit(E.ERROR, {"message": message}, to=sid)
+async def _player_image_ids(db, session: GameSession) -> dict:
+    """`imageIds` for a player's sync_state while the game can still be played, so
+    phones preload map images. In LOBBY the list can go stale (questions are still
+    editable); `game_images` at start is final."""
+    if session.status not in ("LOBBY", "IN_PROGRESS"):
+        return {}
+    return {"imageIds": await game_service.get_game_image_ids(db, session.game_id)}
+
+
+async def _emit_error(sid: str, message: str, code: str | None = None) -> None:
+    """`code` marks errors a client may treat as non-fatal (late-answer timing);
+    errors without one stay fatal on the player app."""
+    payload = {"message": message}
+    if code is not None:
+        payload["code"] = code
+    await sio.emit(E.ERROR, payload, to=sid)
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +637,7 @@ async def on_join_room(sid: str, data: dict) -> None:
                     "currentQuestion": current_q,
                     "hasAnswered": has_answered,
                     "questionLocked": question_locked,
+                    **await _player_image_ids(db, session),
                 },
                 to=sid,
             )
@@ -791,6 +813,7 @@ async def on_rejoin_room(sid: str, data: dict) -> None:
                     "currentQuestion": current_q,
                     "hasAnswered": has_answered,
                     "questionLocked": question_locked,
+                    **await _player_image_ids(db, session),
                 },
                 to=sid,
             )
@@ -939,6 +962,13 @@ async def _on_host_advance_impl(sid: str) -> None:
                 question_ids = [q.id for q in questions]
                 room_state["question_ids"] = question_ids
                 next_index = 0
+                # Before the first NEW_QUESTION, so phones start fetching maps now.
+                # Edits are locked once IN_PROGRESS, so this list is final.
+                await sio.emit(
+                    E.GAME_IMAGES,
+                    {"imageIds": game_service.game_image_ids(questions)},
+                    to=room_code,
+                )
 
             if next_index >= len(question_ids):
                 # All questions exhausted → end game
@@ -1091,11 +1121,11 @@ async def on_submit_answer(sid: str, data: dict) -> None:
                     session_id=session_id,
                     phase=room_state.get("question_phase") if room_state else None,
                 )
-            await _emit_error(sid, "No active question")
+            await _emit_error(sid, "No active question", "NO_ACTIVE_QUESTION")
             return
 
         if room_state.get("question_locked"):
-            await _emit_error(sid, "Question is locked")
+            await _emit_error(sid, "Question is locked", "QUESTION_LOCKED")
             return
 
         current_q_state = await state.get_current_question(redis, session_id)
@@ -1110,7 +1140,11 @@ async def on_submit_answer(sid: str, data: dict) -> None:
                     else None,
                     received=question_id,
                 )
-            await _emit_error(sid, "Question ID does not match the active question")
+            await _emit_error(
+                sid,
+                "Question ID does not match the active question",
+                "QUESTION_MISMATCH",
+            )
             return
 
         # Idempotent: acknowledge but don't double-score
@@ -1130,6 +1164,16 @@ async def on_submit_answer(sid: str, data: dict) -> None:
         question = await db.get(Question, question_id)
         if not question:
             await _emit_error(sid, "Question not found")
+            return
+
+        # map_pin_click checks isfinite: Python's json accepts a literal NaN.
+        if (
+            question.type == "map_pin"
+            and game_service.map_pin_click(answer_data) is None
+        ):
+            await _emit_error(
+                sid, "map_pin answer must include x and y between 0 and 1"
+            )
             return
 
         if question.type == "multi_select":

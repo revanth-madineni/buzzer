@@ -7,10 +7,13 @@ generated with Pillow; the sample US map lives at sample_games/assets/us-map.png
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
+import json
 import pathlib
 import uuid
+from dataclasses import dataclass
 
 import httpx
 import pytest
@@ -18,6 +21,7 @@ from PIL import Image, ImageCms
 from PIL.PngImagePlugin import PngInfo
 
 from . import t4_helpers
+from .engine.socket_client import TestSocketClient as SocketClient
 from .t4_helpers import T4World, assert_error
 
 t4 = t4_helpers.t4  # fixture
@@ -615,3 +619,415 @@ def test_update_other_types_still_validated(t4: T4World, editor):
     r = update_q(t4, game, mc["id"], {"prompt": "Renamed"}, token, host=host)
     assert r.status_code == 200, r.text
     assert r.json()["answer_data"] == mc["answer_data"]
+
+
+# ---------------------------------------------------------------------------
+# Live game helpers (sockets)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LiveGame:
+    host: SocketClient
+    players: list[SocketClient]
+    room_code: str
+    session_id: str
+
+    async def close(self) -> None:
+        for c in (self.host, *self.players):
+            await c.disconnect()
+
+
+async def open_game(t4: T4World, course: int, game: int, n_players: int) -> LiveGame:
+    """Room + guests, everyone joined, host first. Nothing started yet."""
+    r = t4.create_room(game, course)
+    assert r.status_code == 201, r.text
+    room_code, session_id = r.json()["room_code"], r.json()["session_id"]
+    tokens = [t4.guest_token(room_code) for _ in range(n_players)]
+    host = SocketClient(t4.base_url, t4.admin_token, "host")
+    players = [SocketClient(t4.base_url, tok, f"p{i}") for i, tok in enumerate(tokens)]
+    live = LiveGame(host, players, room_code, session_id)
+    try:
+        await host.connect()
+        await host.emit("join_room", {"room_code": room_code, "role": "HOST"})
+        await host.wait_for("sync_state")
+        for p in players:
+            await p.connect()
+            await p.emit("join_room", {"room_code": room_code, "role": "PLAYER"})
+            await host.wait_for("player_joined")
+    except BaseException:
+        await live.close()
+        raise
+    return live
+
+
+async def next_question(live: LiveGame) -> int:
+    """host_advance into the next question; returns its ID (as every player sees it)."""
+    await live.host.emit("host_advance", {})
+    qid = (await live.host.wait_for("new_question"))["questionId"]
+    for p in live.players:
+        assert (await p.wait_for("new_question"))["questionId"] == qid
+    return qid
+
+
+async def submit(player: SocketClient, qid: int, answer: object) -> tuple[str, dict]:
+    """("answer_received" | "error", payload)."""
+    await player.emit(
+        "submit_answer",
+        {"question_id": qid, "answer_data": answer, "answer_time_ms": 500},
+    )
+    ok = asyncio.ensure_future(player.wait_for("answer_received"))
+    err = asyncio.ensure_future(player.wait_for("error"))
+    done, pending = await asyncio.wait(
+        {ok, err}, timeout=10.0, return_when=asyncio.FIRST_COMPLETED
+    )
+    for task in pending:
+        task.cancel()
+    assert done, f"[{player.label}] no answer_received or error"
+    task = done.pop()
+    return ("answer_received" if task is ok else "error"), task.result()
+
+
+async def results(live: LiveGame) -> dict:
+    """host_advance QUESTION → RESULTS; returns the host's question_results."""
+    await live.host.emit("host_advance", {})
+    host_results = await live.host.wait_for("question_results")
+    for p in live.players:
+        await p.wait_for("question_results")
+    return host_results
+
+
+async def finish(live: LiveGame) -> dict:
+    """host_advance from the last RESULTS; returns the host's game_over."""
+    await live.host.emit("host_advance", {})
+    return await live.host.wait_for("game_over")
+
+
+def map_game(t4: T4World, questions: list[dict]) -> tuple[int, int, list[int]]:
+    course = t4.course()
+    game = t4.game(course)
+    ids = []
+    for body in questions:
+        r = create_q(t4, game, body)
+        assert r.status_code == 201, r.text
+        ids.append(r.json()["id"])
+    return course, game, ids
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — scoring (non-square image, aspect 2)
+# ---------------------------------------------------------------------------
+
+FULL, ZERO = 0.04, 0.15
+D_MID = (FULL + ZERO) / 2
+
+
+async def test_scoring_end_to_end(t4: T4World):
+    img = upload_ok(t4, png((800, 400)))
+    course, game, _ = map_game(
+        t4,
+        [
+            map_pin_question(img["id"], points=10),
+            map_pin_question(img["id"], points=10, grading_type="COMPLETENESS"),
+            map_pin_question(img["id"], points=7),
+        ],
+    )
+    live = await open_game(t4, course, game, 4)
+    try:
+        # Q1: on target / horizontal mid / vertical mid (aspect-corrected) / beyond
+        qid = await next_question(live)
+        taps = [
+            {"x": 0.5, "y": 0.5},
+            {"x": 0.5 + D_MID, "y": 0.5},
+            {"x": 0.5, "y": 0.5 + D_MID * 2},  # dy = d_mid × aspect = 0.19
+            {"x": 0.5 + ZERO + 0.05, "y": 0.5},
+        ]
+        got = [await submit(p, qid, tap) for p, tap in zip(live.players, taps)]
+        assert all(kind == "answer_received" for kind, _ in got), got
+        points = [payload["pointsAwarded"] for _, payload in got]
+        correct = [payload["isCorrect"] for _, payload in got]
+        assert points[0] == 10
+        assert points[1] == pytest.approx(5, abs=0.01)
+        assert points[2] == pytest.approx(5, abs=0.01)
+        assert points[3] == 0
+        assert correct == [True, False, False, False]
+        await results(live)
+
+        # Q2 COMPLETENESS: full points even beyond zeroRadius
+        qid = await next_question(live)
+        kind, payload = await submit(live.players[0], qid, {"x": 0.0, "y": 0.0})
+        assert kind == "answer_received"
+        assert (payload["pointsAwarded"], payload["isCorrect"]) == (10, True)
+        await results(live)
+
+        # Q3 points 7 at 50% → 3.5
+        qid = await next_question(live)
+        kind, payload = await submit(live.players[0], qid, {"x": 0.5 + D_MID, "y": 0.5})
+        assert kind == "answer_received"
+        assert payload["pointsAwarded"] == 3.5
+        assert payload["totalScore"] == 23.5
+        await results(live)
+
+        over = await finish(live)
+        assert 23.5 in over["scores"]
+        p0_over = await live.players[0].wait_for("game_over")
+        assert p0_over["yourFinalScore"] == 23.5
+    finally:
+        await live.close()
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — socket validation
+# ---------------------------------------------------------------------------
+
+BAD_ANSWERS = [
+    {"x": "0.5", "y": 0.5},
+    {"x": None, "y": 0.5},
+    {"x": float("nan"), "y": 0.5},  # json.dumps writes a literal NaN
+    {"x": 0.5},
+    {"x": 0.5, "y": 0.5, "z": 1},
+]
+
+
+async def test_socket_rejects_bad_map_pin_answers(t4: T4World):
+    img = upload_ok(t4, png())
+    course, game, _ = map_game(t4, [map_pin_question(img["id"])])
+    live = await open_game(t4, course, game, 1)
+    try:
+        qid = await next_question(live)
+        player = live.players[0]
+        for bad in BAD_ANSWERS:
+            kind, payload = await submit(player, qid, bad)
+            assert kind == "error", (bad, payload)
+            assert payload["message"] == (
+                "map_pin answer must include x and y between 0 and 1"
+            )
+            assert "code" not in payload  # fatal, not a timing rejection
+        assert (await results(live))["totalAnswered"] == 0
+    finally:
+        await live.close()
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — answer privacy and reveal
+# ---------------------------------------------------------------------------
+
+
+async def test_new_question_hides_answer_and_reveal_is_full(t4: T4World):
+    img = upload_ok(t4, png((800, 400)))
+    course, game, _ = map_game(
+        t4,
+        [
+            map_pin_question(img["id"], target=(0.25, 0.75)),
+            map_pin_question(img["id"], target=(0.6, 0.4), grading_type="COMPLETENESS"),
+            {
+                **t4_helpers.MC_QUESTION,
+                "grading_type": "COMPLETENESS",
+                "answer_data": {},
+            },
+        ],
+    )
+    live = await open_game(t4, course, game, 1)
+    try:
+        for target, grading in (
+            ((0.25, 0.75), "ACCURACY"),
+            ((0.6, 0.4), "COMPLETENESS"),
+        ):
+            await live.host.emit("host_advance", {})
+            host_q = await live.host.wait_for("new_question")
+            player_q = await live.players[0].wait_for("new_question")
+            for payload in (host_q, player_q):
+                text = json.dumps(payload)
+                for secret in ("targets", "fullRadius", "zeroRadius", "answer_data"):
+                    assert secret not in text, payload
+                assert payload["config"] == {
+                    "imageId": img["id"],
+                    "imageWidth": 800,
+                    "imageHeight": 400,
+                }
+
+            reveal = (await results(live))["answerReveal"]
+            assert reveal == {
+                "type": "map_pin",
+                "gradingType": grading,
+                "imageId": img["id"],
+                "imageWidth": 800,
+                "imageHeight": 400,
+                "target": {"x": target[0], "y": target[1]},
+                "fullRadius": FULL,
+                "zeroRadius": ZERO,
+            }
+
+        # Regression guard: COMPLETENESS multiple_choice still reveals "completeness".
+        await next_question(live)
+        assert (await results(live))["answerReveal"] == {"type": "completeness"}
+    finally:
+        await live.close()
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — distribution
+# ---------------------------------------------------------------------------
+
+
+async def test_distribution_buckets(t4: T4World):
+    img = upload_ok(t4, png())
+    course, game, _ = map_game(t4, [map_pin_question(img["id"])])
+    live = await open_game(t4, course, game, 3)
+    try:
+        qid = await next_question(live)
+        # Two taps in the same 2% cell (11,20), one elsewhere (49,49).
+        taps = [
+            {"x": 0.221, "y": 0.401},
+            {"x": 0.239, "y": 0.419},
+            {"x": 1.0, "y": 1.0},
+        ]
+        for p, tap in zip(live.players, taps):
+            assert (await submit(p, qid, tap))[0] == "answer_received"
+        host_results = await results(live)
+        assert host_results["answerDistribution"] == {"11,20": 2, "49,49": 1}
+
+        over = await finish(live)
+        summary = over["questionSummary"][0]
+        assert summary["answerDistribution"] == {"11,20": 2, "49,49": 1}
+    finally:
+        await live.close()
+
+
+# ---------------------------------------------------------------------------
+# Test 12 — preloading
+# ---------------------------------------------------------------------------
+
+
+async def test_preload_image_ids(t4: T4World):
+    a = upload_ok(t4, png())
+    b = upload_ok(t4, png((40, 80)))
+    course, game, _ = map_game(
+        t4,
+        [
+            map_pin_question(b["id"]),
+            t4_helpers.MC_QUESTION,
+            map_pin_question(a["id"]),
+            map_pin_question(b["id"]),
+        ],
+    )
+    live = await open_game(t4, course, game, 2)
+    try:
+        sync = await live.players[0].wait_for("sync_state")
+        assert sync["imageIds"] == [b["id"], a["id"]]
+
+        await live.host.emit("host_advance", {})
+        for client in (live.host, *live.players):
+            images = await client.wait_for("game_images")
+            assert images == {"imageIds": [b["id"], a["id"]]}
+            await client.wait_for("new_question")
+            assert client.log.index("game_images") < client.log.index("new_question")
+    finally:
+        await live.close()
+
+
+async def test_preload_image_ids_empty_without_map_pin(t4: T4World):
+    course, game, _ = map_game(t4, [t4_helpers.MC_QUESTION])
+    live = await open_game(t4, course, game, 1)
+    try:
+        assert (await live.players[0].wait_for("sync_state"))["imageIds"] == []
+        await live.host.emit("host_advance", {})
+        assert (await live.players[0].wait_for("game_images")) == {"imageIds": []}
+    finally:
+        await live.close()
+
+
+async def test_preload_image_ids_on_rejoin_in_progress(t4: T4World):
+    img = upload_ok(t4, png())
+    course, game, _ = map_game(t4, [map_pin_question(img["id"])])
+    live = await open_game(t4, course, game, 1)
+    try:
+        await next_question(live)
+        late = SocketClient(t4.base_url, live.players[0].token, "rejoin")
+        await late.connect()
+        try:
+            await late.emit("rejoin_room", {"room_code": live.room_code})
+            assert (await late.wait_for("sync_state"))["imageIds"] == [img["id"]]
+        finally:
+            await late.disconnect()
+    finally:
+        await live.close()
+
+
+# ---------------------------------------------------------------------------
+# Test 13 — late answers are non-fatal (error codes)
+# ---------------------------------------------------------------------------
+
+
+async def test_late_answer_error_codes(t4: T4World):
+    img = upload_ok(t4, png())
+    course, game, _ = map_game(
+        t4,
+        [
+            {**map_pin_question(img["id"]), "time_limit_seconds": 2},
+            map_pin_question(img["id"]),
+        ],
+    )
+    live = await open_game(t4, course, game, 1)
+    player = live.players[0]
+    tap = {"x": 0.5, "y": 0.5}
+    try:
+        q1 = await next_question(live)
+        await player.wait_for("question_locked", timeout=10)
+        kind, payload = await submit(player, q1, tap)
+        assert (kind, payload.get("code")) == ("error", "QUESTION_LOCKED"), payload
+        assert payload["message"] == "Question is locked"
+
+        assert (await results(live))["totalAnswered"] == 0
+        kind, payload = await submit(player, q1, tap)
+        assert (kind, payload.get("code")) == ("error", "NO_ACTIVE_QUESTION"), payload
+
+        q2 = await next_question(live)
+        kind, payload = await submit(player, q1, tap)  # stale question_id
+        assert (kind, payload.get("code")) == ("error", "QUESTION_MISMATCH"), payload
+        assert payload["message"] == "Question ID does not match the active question"
+        assert (await results(live))["totalAnswered"] == 0
+
+        # The socket is still usable afterwards: nothing above was fatal server-side.
+        assert q2 != q1
+    finally:
+        await live.close()
+
+
+# ---------------------------------------------------------------------------
+# Test 14 — host summary stats
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("grading", ["ACCURACY", "COMPLETENESS"])
+async def test_host_summary_stats(t4: T4World, grading: str):
+    img = upload_ok(t4, png((800, 400)))
+    course, game, _ = map_game(
+        t4,
+        [
+            map_pin_question(img["id"], grading_type=grading),
+            map_pin_question(img["id"], grading_type=grading),  # nobody answers
+        ],
+    )
+    live = await open_game(t4, course, game, 3)
+    try:
+        qid = await next_question(live)
+        taps = [
+            {"x": 0.5, "y": 0.5},  # d = 0, within
+            {"x": 0.5 + D_MID, "y": 0.5},  # credit 0.5
+            {"x": 0.5 + ZERO + 0.1, "y": 0.5},  # beyond zero
+        ]
+        for p, tap in zip(live.players, taps):
+            assert (await submit(p, qid, tap))[0] == "answer_received"
+        await results(live)
+        await next_question(live)
+        await results(live)
+
+        summary = (await finish(live))["questionSummary"]
+        assert summary[0]["withinFullPct"] == 33.3
+        assert summary[0]["averageCredit"] == 0.5
+        assert summary[0]["answerReveal"]["type"] == "map_pin"
+        assert summary[1]["withinFullPct"] is None
+        assert summary[1]["averageCredit"] is None
+    finally:
+        await live.close()

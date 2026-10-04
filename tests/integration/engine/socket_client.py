@@ -5,6 +5,7 @@ Each instance wraps one python-socketio.AsyncClient and exposes a simple
 `wait_for(event)` API backed by per-event asyncio.Queue objects so that
 multiple events of the same type can be queued and consumed in order.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,8 @@ _TRACKED = [
     "player_left",
     "host_disconnected",
     "game_abandoned",
+    "game_images",
+    "question_locked",
     "error",
 ]
 
@@ -40,6 +43,8 @@ class TestSocketClient:
         self.label = label
         self.sio = socketio.AsyncClient(logger=False, engineio_logger=False)
         self._queues: dict[str, asyncio.Queue] = {e: asyncio.Queue() for e in _TRACKED}
+        # Every tracked event name in arrival order, for event-ordering assertions.
+        self.log: list[str] = []
         self._register_handlers()
 
     # ------------------------------------------------------------------
@@ -52,6 +57,7 @@ class TestSocketClient:
             @self.sio.on(event)
             async def _handler(data=None, _ev=event):
                 logger.debug("[%s] received %s: %s", self.label, _ev, data)
+                self.log.append(_ev)
                 await self._queues[_ev].put(data or {})
 
     # ------------------------------------------------------------------
