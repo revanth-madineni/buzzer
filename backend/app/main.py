@@ -8,6 +8,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from .common.body_limit import MB, BodySizeLimitMiddleware
 from .common.exceptions import register_exception_handlers
 from .common.logging import configure_logging
 from .common.rate_limit import limiter
@@ -42,6 +43,15 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+# Bounds upload/import bodies before parsing. Inside CORS so 413s still get CORS headers.
+app.add_middleware(
+    BodySizeLimitMiddleware,
+    rules=[
+        ("POST", r"^/api/admin/images$", int(2.5 * MB)),
+        ("POST", r"^/api/host/courses/\d+/images$", int(2.5 * MB)),
+        ("POST", r"^/api/admin/games/import$", 26 * MB),
+    ],
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
