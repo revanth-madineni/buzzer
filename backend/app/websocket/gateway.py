@@ -986,7 +986,11 @@ async def _on_host_advance_impl(sid: str) -> None:
                         _Question.game_id == session.game_id
                     )
                 )
-                max_possible_score = int(max_possible_result.scalar_one() or 0)
+                # Points are floats (migration 003, map_pin partial credit): don't
+                # truncate, or a 7.5-point game reports 7 and real scores exceed it.
+                max_possible_score = round(
+                    float(max_possible_result.scalar_one() or 0), 2
+                )
 
                 # Send anonymous score list + per-question summary to host
                 host_q_summary = await game_service.get_host_question_summary(
