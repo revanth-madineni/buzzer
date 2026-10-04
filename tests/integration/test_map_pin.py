@@ -8,10 +8,12 @@ generated with Pillow; the sample US map lives at sample_games/assets/us-map.png
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import io
 import json
 import pathlib
+import subprocess
 import uuid
 from dataclasses import dataclass
 
@@ -1031,3 +1033,254 @@ async def test_host_summary_stats(t4: T4World, grading: str):
         assert summary[1]["averageCredit"] is None
     finally:
         await live.close()
+
+
+# ---------------------------------------------------------------------------
+# Import / export helpers
+# ---------------------------------------------------------------------------
+
+
+def export_bundle(t4: T4World, game_id: int) -> dict:
+    r = t4.request("GET", f"/admin/games/{game_id}/export")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def import_bundle(
+    t4: T4World, bundle: dict | bytes, course_id: int | None = None
+) -> httpx.Response:
+    body = bundle if isinstance(bundle, bytes) else json.dumps(bundle).encode()
+    form = {"course_id": str(course_id)} if course_id is not None else None
+    r = t4.request(
+        "POST",
+        "/admin/games/import",
+        files={"file": ("game.json", body, "application/json")},
+        data=form,
+    )
+    if r.status_code == 201:
+        t4.track_game(r.json()["game_id"])
+    return r
+
+
+def image_row_count() -> int:
+    """No list endpoint exists (by design), so count rows in the compose MySQL."""
+    shell = 'mysql -N -uapp_user -p"$MYSQL_PASSWORD" buzzer -e "SELECT COUNT(*) FROM images"'
+    out = subprocess.run(
+        ["docker", "compose", "exec", "-T", "mysql", "sh", "-c", shell],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return int(out.stdout.strip())
+
+
+def b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+def hand_bundle(images: list[dict], questions: list[dict], version: int = 2) -> dict:
+    bundle = {
+        "format": "buzzer/game",
+        "version": version,
+        "game": {"title": f"Hand bundle {uuid.uuid4().hex[:6]}"},
+        "questions": questions,
+    }
+    if images is not None:
+        bundle["images"] = images
+    return bundle
+
+
+def game_titles(t4: T4World) -> set[str]:
+    r = t4.request("GET", "/admin/games")
+    assert r.status_code == 200, r.text
+    return {g["title"] for g in r.json()}
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — import/export round trip
+# ---------------------------------------------------------------------------
+
+
+def test_export_import_round_trip(t4: T4World):
+    img = upload_ok(
+        t4,
+        encode(picture((300, 150)), "JPEG", exif=gps_exif()),
+        filename="a.jpg",
+        content_type="image/jpeg",
+    )
+    _, game, _ = map_game(
+        t4,
+        [
+            map_pin_question(img["id"], target=(0.1, 0.2)),
+            t4_helpers.MC_QUESTION,
+            map_pin_question(img["id"], target=(0.7, 0.8), grading_type="COMPLETENESS"),
+        ],
+    )
+    bundle = export_bundle(t4, game)
+    assert bundle["version"] == 2
+    assert [i["id"] for i in bundle["images"]] == [img["id"]]
+    assert bundle["images"][0]["mime_type"] == "image/jpeg"
+    original = get_image(t4, img["id"]).content
+    assert base64.b64decode(bundle["images"][0]["data"]) == original
+
+    before = image_row_count()
+    r = import_bundle(t4, bundle)
+    assert r.status_code == 201, r.text
+    assert image_row_count() == before + 1  # one image, shared by both questions
+
+    questions = sorted(
+        list_qs(t4, r.json()["game_id"]).values(), key=lambda q: q["order_index"]
+    )
+    pins = [q for q in questions if q["type"] == "map_pin"]
+    assert len(pins) == 2
+    new_id = pins[0]["config"]["imageId"]
+    assert new_id != img["id"]
+    assert uuid.UUID(new_id)
+    assert all(
+        q["config"] == {"imageId": new_id, "imageWidth": 300, "imageHeight": 150}
+        for q in pins
+    )
+    assert [q["answer_data"]["targets"] for q in pins] == [
+        [{"x": 0.1, "y": 0.2}],
+        [{"x": 0.7, "y": 0.8}],
+    ]
+    # Buzzer exports are already clean, so the bytes are kept exactly.
+    assert get_image(t4, new_id).content == original
+
+
+def test_import_missing_image_reference_creates_nothing(t4: T4World):
+    q = map_pin_question("not-in-bundle")
+    bundle = hand_bundle(
+        [{"id": "map1", "mime_type": "image/png", "data": b64(png())}], [q]
+    )
+    before_images, before_titles = image_row_count(), game_titles(t4)
+    r = import_bundle(t4, bundle)
+    assert r.status_code == 422, r.text
+    assert (
+        r.json()["detail"] == "Question 1 references image not-in-bundle not in bundle"
+    )
+    assert image_row_count() == before_images
+    assert bundle["game"]["title"] not in game_titles(t4) - before_titles
+
+
+def test_import_server_image_reference_rejected(t4: T4World):
+    """References to images already on the server are not allowed."""
+    img = upload_ok(t4, png())
+    r = import_bundle(t4, hand_bundle([], [map_pin_question(img["id"])]))
+    assert r.status_code == 422, r.text
+    assert "not in bundle" in r.json()["detail"]
+
+
+def test_import_v1_without_map_pin(t4: T4World):
+    bundle = hand_bundle(None, [t4_helpers.MC_QUESTION], version=1)
+    r = import_bundle(t4, bundle)
+    assert r.status_code == 201, r.text
+
+
+def test_import_v1_with_images_rejected(t4: T4World):
+    bundle = hand_bundle([], [t4_helpers.MC_QUESTION], version=1)
+    r = import_bundle(t4, bundle)
+    assert r.status_code == 422, r.text
+
+
+def test_import_hand_made_exif_is_stripped(t4: T4World):
+    src = encode(picture((400, 200)), "JPEG", quality=95, exif=gps_exif(orientation=6))
+    bundle = hand_bundle(
+        [{"id": "photo", "mime_type": "image/jpeg", "data": b64(src)}],
+        [map_pin_question("photo")],
+    )
+    r = import_bundle(t4, bundle)
+    assert r.status_code == 201, r.text
+    (q,) = list_qs(t4, r.json()["game_id"]).values()
+    assert (q["config"]["imageWidth"], q["config"]["imageHeight"]) == (200, 400)
+    stored = open_image(get_image(t4, q["config"]["imageId"]).content)
+    assert not stored.getexif()
+    assert "exif" not in stored.info
+
+
+@pytest.mark.parametrize(
+    ("images", "detail_part"),
+    [
+        (
+            {"id": "m", "mime_type": "image/png", "data": "!!!not base64!!!"},
+            "not base64",
+        ),
+        (
+            {"id": "m", "mime_type": "image/png", "data": b64(b"plain text")},
+            "Image m invalid",
+        ),
+        (
+            {
+                "id": "m",
+                "mime_type": "image/gif",
+                "data": b64(encode(picture(), "GIF")),
+            },
+            "Image m invalid",
+        ),
+        ({"id": "", "mime_type": "image/png", "data": b64(png())}, "non-empty string"),
+        ({"id": "m", "data": b64(png())}, "mime_type"),
+    ],
+)
+def test_import_bad_referenced_image(t4: T4World, images: dict, detail_part: str):
+    bundle = hand_bundle([images], [map_pin_question("m")])
+    r = import_bundle(t4, bundle)
+    assert r.status_code == 422, r.text
+    assert detail_part in r.json()["detail"]
+
+
+def test_import_image_list_limits(t4: T4World):
+    entry = {"mime_type": "image/png", "data": b64(png())}
+    too_many = [{"id": f"i{n}", **entry} for n in range(51)]
+    r = import_bundle(t4, hand_bundle(too_many, [t4_helpers.MC_QUESTION]))
+    assert r.status_code == 422, r.text
+    dupes = [{"id": "x", **entry}, {"id": "x", **entry}]
+    r = import_bundle(t4, hand_bundle(dupes, [t4_helpers.MC_QUESTION]))
+    assert r.status_code == 422, r.text
+    assert "appears twice" in r.json()["detail"]
+
+
+def test_import_over_25mb_rejected(t4: T4World):
+    r = import_bundle(t4, b" " * (25 * 1024 * 1024 + 1))
+    assert r.status_code == 422, r.text
+    assert "25 MB" in r.json()["detail"]
+
+
+def test_export_without_map_pin_has_empty_images(t4: T4World):
+    _, game, _ = map_game(t4, [t4_helpers.MC_QUESTION])
+    bundle = export_bundle(t4, game)
+    assert bundle["version"] == 2
+    assert bundle["images"] == []
+
+
+# ---------------------------------------------------------------------------
+# Test 15 — import edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_import_hand_made_id_is_remapped_to_uuid(t4: T4World):
+    data = png((120, 60))
+    bundle = hand_bundle(
+        [{"id": "map1", "mime_type": "image/png", "data": b64(data)}],
+        [map_pin_question("map1")],
+    )
+    r = import_bundle(t4, bundle)
+    assert r.status_code == 201, r.text
+    (q,) = list_qs(t4, r.json()["game_id"]).values()
+    assert uuid.UUID(q["config"]["imageId"])
+    assert q["config"]["imageWidth"] == 120
+    assert get_image(t4, q["config"]["imageId"]).content == data  # clean PNG kept as-is
+
+
+def test_import_unreferenced_bad_image_ignored(t4: T4World):
+    bundle = hand_bundle(
+        [
+            {"id": "used", "mime_type": "image/png", "data": b64(png())},
+            {"id": "stray", "mime_type": "image/png", "data": "%%% not base64 %%%"},
+        ],
+        [map_pin_question("used")],
+    )
+    before = image_row_count()
+    r = import_bundle(t4, bundle)
+    assert r.status_code == 201, r.text
+    assert image_row_count() == before + 1  # only the referenced image is stored

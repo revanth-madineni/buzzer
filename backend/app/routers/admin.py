@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import json
 import uuid
@@ -22,7 +24,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..common.dependencies import require_admin
-from ..common.exceptions import ConflictError, NotFoundError
+from ..common.exceptions import BuzzerError, ConflictError, NotFoundError
 from ..common.rate_limit import limiter
 from ..database import get_db
 from ..models.course import Course, CourseRoster, UserCourseAccess
@@ -67,7 +69,13 @@ from ..services.export_service import build_canvas_csv, build_session_csv
 from ..services.report_service import build_session_report
 from ..services.roster_service import process_roster_csv, process_roster_rows
 
-_SUPPORTED_IMPORT_VERSION = 1
+# Bundle format (T7 spec §4.8). Export always writes v2; import reads v1 and v2.
+_EXPORT_VERSION = 2
+_SUPPORTED_IMPORT_VERSIONS = (1, 2)
+_MAX_IMPORT_BYTES = (
+    25 * 1024 * 1024
+)  # BodySizeLimitMiddleware stops anything far bigger
+_MAX_BUNDLE_IMAGES = 50
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = structlog.get_logger()
@@ -519,9 +527,26 @@ async def export_game(
     )
     questions = result.scalars().all()
 
+    # Each distinct map_pin image once, as base64. Questions keep their source IDs;
+    # import remaps them.
+    images = []
+    for image_id in game_service.game_image_ids(list(questions)):
+        image = await image_service.get_image_with_data(db, image_id)
+        if image is None:  # shouldn't happen: v1 has no image delete
+            raise BuzzerError(
+                "EXPORT_IMAGE_MISSING", f"Image {image_id} is missing", 409
+            )
+        images.append(
+            {
+                "id": image.id,
+                "mime_type": image.mime_type,
+                "data": base64.b64encode(image.data).decode("ascii"),
+            }
+        )
+
     bundle = {
         "format": "buzzer/game",
-        "version": _SUPPORTED_IMPORT_VERSION,
+        "version": _EXPORT_VERSION,
         "game": {
             "title": game.title,
             "description": game.description,
@@ -539,6 +564,7 @@ async def export_game(
             }
             for q in questions
         ],
+        "images": images,
     }
 
     safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in game.title)
@@ -554,14 +580,18 @@ async def export_game(
 @router.post("/games/import", status_code=201)
 async def import_game(
     file: Annotated[UploadFile, File(description="buzzer/game JSON bundle")],
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     course_id: Annotated[int | None, Form()] = None,
 ) -> dict:
     # The course comes only from this form field, never from the bundle.
     if course_id is not None and not await db.get(Course, course_id):
         raise NotFoundError(f"Course {course_id} not found")
+    if file.size is not None and file.size > _MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=422, detail="File is larger than 25 MB")
     raw = await file.read()
+    if len(raw) > _MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=422, detail="File is larger than 25 MB")
     try:
         bundle = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -570,11 +600,12 @@ async def import_game(
     if bundle.get("format") != "buzzer/game":
         raise HTTPException(status_code=422, detail="Unrecognised file format")
     version = bundle.get("version")
-    if version != _SUPPORTED_IMPORT_VERSION:
+    if isinstance(version, bool) or version not in _SUPPORTED_IMPORT_VERSIONS:
         raise HTTPException(
             status_code=422,
-            detail=f"Unsupported version {version!r}; server supports version {_SUPPORTED_IMPORT_VERSION}",
+            detail=f"Unsupported version {version!r}; server supports versions 1 and 2",
         )
+    bundle_images = _bundle_images(bundle, version)
 
     game_data = bundle.get("game", {})
     try:
@@ -593,6 +624,37 @@ async def import_game(
             raise HTTPException(
                 status_code=422, detail=f"Question {i + 1} invalid: {exc}"
             ) from exc
+
+    # Map images: every reference must be in the bundle (bundles are self-contained).
+    # Only referenced images are decoded and validated; others are ignored entirely.
+    prepared: dict[str, image_service.PreparedImage] = {}
+    for i, q in enumerate(validated_questions):
+        if q.type != "map_pin":
+            continue
+        image_id = q.config["imageId"]
+        if image_id not in bundle_images:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Question {i + 1} references image {image_id} not in bundle",
+            )
+        if image_id not in prepared:
+            prepared[image_id] = _prepare_bundle_image(
+                image_id, bundle_images[image_id]
+            )
+
+    # Inserts, all in this transaction: images (new UUIDs), then game and questions.
+    new_ids: dict[str, str] = {}
+    for old_id, image in prepared.items():
+        stored = await image_service.store_prepared(db, image, admin, course_id)
+        new_ids[old_id] = stored.id
+    for q in validated_questions:
+        if q.type == "map_pin":
+            old_id = q.config["imageId"]
+            q.config = {
+                "imageId": new_ids[old_id],
+                "imageWidth": prepared[old_id].width,
+                "imageHeight": prepared[old_id].height,
+            }
 
     game = Game(
         title=game_meta.title,
@@ -625,8 +687,69 @@ async def import_game(
         game_id=game.id,
         title=game.title,
         question_count=len(validated_questions),
+        image_count=len(new_ids),
     )
     return {"game_id": game.id}
+
+
+def _bundle_images(bundle: dict, version: int) -> dict[str, str]:
+    """Bundle image list → {id: base64 data}. Shape only; nothing is decoded here."""
+    if "images" not in bundle:
+        return {}
+    if version == 1:
+        raise HTTPException(
+            status_code=422, detail="Version 1 bundles cannot contain images"
+        )
+    entries = bundle["images"]
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=422, detail="images must be a list")
+    if len(entries) > _MAX_BUNDLE_IMAGES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"A bundle can contain at most {_MAX_BUNDLE_IMAGES} images",
+        )
+    images: dict[str, str] = {}
+    for n, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=422, detail=f"Image {n} must be an object")
+        image_id = entry.get("id")
+        if not isinstance(image_id, str) or not 1 <= len(image_id) <= 64:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Image {n} id must be a non-empty string of at most 64 characters",
+            )
+        if image_id in images:
+            raise HTTPException(
+                status_code=422, detail=f"Image id {image_id} appears twice"
+            )
+        # mime_type is informational: the decoded format wins.
+        if not isinstance(entry.get("mime_type"), str):
+            raise HTTPException(
+                status_code=422, detail=f"Image {image_id} needs a mime_type string"
+            )
+        if not isinstance(entry.get("data"), str):
+            raise HTTPException(
+                status_code=422, detail=f"Image {image_id} needs a base64 data string"
+            )
+        images[image_id] = entry["data"]
+    return images
+
+
+def _prepare_bundle_image(image_id: str, data: str) -> image_service.PreparedImage:
+    """Decode and validate one referenced bundle image. Re-encodes only if it still
+    carries metadata, so images from Buzzer exports are kept byte-for-byte."""
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Image {image_id} invalid: data is not base64"
+        ) from exc
+    try:
+        return image_service.prepare_image(raw, force_reencode=False)
+    except BuzzerError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Image {image_id} invalid: {exc.message}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
