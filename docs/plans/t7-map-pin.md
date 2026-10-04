@@ -253,8 +253,9 @@ body is parsed before dependencies run. Instead:
   `client_max_body_size 26m;` to the `location /api/` block.
 - **Production:** whoever owns the production proxy (Traefik, outside this repo) needs the
   same ≥ 26 MB allowance on `/api/`. Record this in `backend/CLAUDE.md` Gotchas.
-- **Import:** keeps its "files over 25 MB → 422" check on the bytes it read. The middleware
-  is what stops a 1 GB upload.
+- **Import:** adds a "files over 25 MB → 422" check (there was none before T7), using the
+  upload's size before reading and the bytes read after. The middleware is what stops a 1 GB
+  upload.
 
 Schema `ImageResponse` (in `schemas/admin.py`, reused by host): `id`, `mime_type`, `width`,
 `height`, `byte_size`, `sha256`. Never the data.
@@ -468,7 +469,9 @@ Bump `_SUPPORTED_IMPORT_VERSION` handling:
     1. **Image list shape.** v1 bundles may not contain `images`. In v2 it is optional and holds
        at most 50 entries. Each entry needs a unique `id` (a non-empty string of at most 64
        characters; any string, not just UUIDs, so hand-made bundles can use `"map1"`), a
-       `mime_type` (informational; the decoded format wins) and a `data` string.
+       `mime_type` (informational; the decoded format wins) and a `data` string. Other keys
+       in an entry are ignored, so a later bundle version can add fields that older servers
+       skip.
     2. **Questions.** Run `QuestionCreate` on each question, as today.
     3. **References.** Every `map_pin` question's `config.imageId` must be one of the bundle's
        image `id`s. Otherwise 422 `"Question {n} references image {id} not in bundle"`.
@@ -771,7 +774,8 @@ Against the live stack, following `conftest.py`. Each item is one test:
     - Import it → new game, new image ID (≠ source), questions point to the new ID, and the
       bytes are identical.
     - A bundle whose question references a missing image → 422, with **no** game or image rows
-      created.
+      created. There is no image list endpoint, so the test counts `images` rows in the
+      compose MySQL.
     - A v1 bundle with no map-pin questions still imports.
     - A hand-made v2 bundle whose image carries GPS EXIF → the stored image has no EXIF.
 12. **Preloading:**
@@ -971,3 +975,5 @@ Per `.claude/rules/context-sync.md`, update:
   - `ImageResponse` includes `sha256`.
 - 2026-10-04 — Corrected §4.5: `QuestionCreate` and `QuestionUpdate` both have an optional
   `order_index`; it stays out of the merged validation and is applied from the PUT.
+- 2026-10-04 — Step 4: import's 25 MB check is new, not kept; extra keys in bundle image
+  entries are ignored; test 11 counts image rows in MySQL.
