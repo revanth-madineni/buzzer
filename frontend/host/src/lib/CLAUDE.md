@@ -2,8 +2,8 @@
 
 ## Purpose
 Small shared helpers for the host (big-screen) app: a JSON fetch wrapper for the REST API
-(including multipart upload and file download for the management area) and a Tailwind
-class-merge helper. There is no socket code and no role or course-access
+(including multipart upload and file download for the management area), a Tailwind
+class-merge helper, and (T7) map-pin geometry and authenticated image loading. There is no socket code and no role or course-access
 logic here. The Socket.IO client is created in `pages/game/GameLayout.tsx`.
 
 ## Contents
@@ -17,6 +17,12 @@ logic here. The Socket.IO client is created in `pages/game/GameLayout.tsx`.
     `message` (`BuzzerError`), else a string `detail`, else "Invalid input" for a validation
     array, else `HTTP <status>`.
 - `utils.ts` — `cn(...)` (clsx + tailwind-merge), used by `components/ui/*`.
+- `mapPin.ts` (T7) — map-pin geometry and drawing, **byte-identical to the player's and
+  admin's copies**; see `frontend/player/src/lib/CLAUDE.md` for the full description.
+  Untested (no test runner).
+- `images.ts` (T7) — `loadImage` / `preloadImages`: images fetched with the Bearer token as
+  blob URLs (an `<img src>` would 401), the promise cached per ID, failures evicted, and one
+  shared `POST /api/auth/refresh` + retry on a 401. Byte-identical to the other apps' copies.
 
 ## How it fits in
 Consumers, and the backend guard on each call (see `backend/app/routers/CLAUDE.md` for the
@@ -34,6 +40,8 @@ full access map and `backend/app/common/CLAUDE.md` for the role dependencies):
 | `App.tsx` (`HostLayout`) | `GET /game/my-courses` | as above |
 | `pages/manage/GamesPage.tsx` | `GET/POST /host/courses/{cid}/games`, `PUT/DELETE /host/games/{gid}` | `require_course_host` / `require_game_host` |
 | `pages/manage/QuestionEditorPage.tsx` | `GET /host/games/{gid}`, `GET/POST .../questions`, `PUT/DELETE .../questions/{qid}`, `POST .../questions/reorder` | `require_game_host` / `require_question_host`; writes 409 `GAME_LIVE` during a game |
+| `pages/manage/QuestionEditorPage.tsx` | `postForm /host/courses/{cid}/images` (map-pin image upload, T7) | `require_course_host` |
+| `lib/images.ts` (via `components/MapCanvas`) | `GET /images/{id}`, and `POST /auth/refresh` once on a 401 | `get_current_user` |
 | `pages/manage/RosterPage.tsx` | `GET /host/courses/{cid}/roster`, `postForm` same path (`file`, `mode`) | `require_course_host` |
 | `pages/manage/SessionsPage.tsx` | `GET /host/courses/{cid}/sessions?status=COMPLETED`, `download /host/sessions/{sid}/export\|report` | `require_course_host` / `require_session_host` |
 
@@ -59,7 +67,8 @@ cleared by `HomePage` on logout. `App.tsx`'s `RequireAuth` only checks that the 
   browser overwrites the host's token, and logging out of any app logs out all of them.
 - **Validation errors are generic.** A 422 `VALIDATION_ERROR` shows only "Invalid input". The
   field-level `detail` array isn't rendered.
-- **No token refresh.** Nothing calls `/api/auth/refresh`, and there is no 401 retry. After the
+- **Token refresh only for images.** Only `images.ts` calls `/api/auth/refresh` (once, on a 401
+  for an image); `api.ts` has no 401 retry. After the
   2 h access token expires, API calls fail even though a 7-day refresh cookie exists, and
   `RequireAuth` still lets the user in because the stale token is present.
 - The JSON helpers set `Content-Type: application/json` on every request, including GETs and
