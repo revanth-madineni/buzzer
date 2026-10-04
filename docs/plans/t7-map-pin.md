@@ -1,6 +1,6 @@
 # T7 — Map Pin Question Type (classroom, canvas)
 
-Status: agreed design, not yet goldfish-tested. Written 2026-10-04.
+Status: agreed design, goldfish-tested and revised. Written 2026-10-04.
 Scope: one of the two T7 types (the classroom one). The party type is a teammate's separate spec.
 Also delivers the minimal image storage that T8 builds on.
 
@@ -134,12 +134,17 @@ The steps run in this order:
 1. `len(raw) > 2 * 1024 * 1024` → 413 `IMAGE_TOO_LARGE` (2 MB cap on the input bytes).
 2. `PILImage.open(BytesIO(raw))`. This reads only the header. Any exception → 422
    `INVALID_IMAGE`. **SVG, HTML and plain text land here**: Pillow can't open them at all.
-3. Map `format` → mime: `PNG→image/png`, `JPEG→image/jpeg`, `WEBP→image/webp`. Any other
-   format Pillow can open (GIF, BMP, TIFF, …) → 415 `UNSUPPORTED_IMAGE_TYPE`. **The mime comes
-   from the decoded format, never from the client's declared Content-Type or file
-   extension.** The output keeps the same format.
+3. Map `format` → mime: `PNG→image/png`, `JPEG→image/jpeg`, `MPO→image/jpeg`,
+   `WEBP→image/webp`. Any other format Pillow can open (GIF, BMP, TIFF, …) → 415
+   `UNSUPPORTED_IMAGE_TYPE`. **The mime comes from the decoded format, never from the client's
+   declared Content-Type or file extension.** The output keeps the same format (MPO is saved as
+   JPEG).
+   - **MPO** is what Pillow reports for a JPEG whose MPF segment holds 2+ images (common in
+     phone photos with a depth map or HDR gain map). It is treated as a JPEG: only the primary
+     image is kept, and it is **always re-encoded** (step 7), which drops the MPF segment and
+     the secondary images.
 4. **Reject animation:** `getattr(img, "is_animated", False)` or `getattr(img, "n_frames", 1) > 1`
-   → 415 `UNSUPPORTED_IMAGE_TYPE`.
+   → 415 `UNSUPPORTED_IMAGE_TYPE`. **Skipped for MPO**, whose extra frames are not animation.
 5. **Check dimensions before decoding** (header size, before any rotation): `width` or `height`
    < 1 or > 8000, or `width × height` > 40,000,000 → 422 `INVALID_IMAGE`. This is the
    decompression-bomb guard, and it runs before `load()`, so oversized images are never
@@ -154,11 +159,14 @@ The steps run in this order:
    |---|---|---|
    | JPEG | APP0 `JFIF`, APP2 `ICC_PROFILE`, APP14 `Adobe` segments (check `img.applist`). `info` keys `jfif`, `jfif_version`, `jfif_unit`, `jfif_density`, `dpi`, `progressive`, `progression`, `adobe`, `adobe_transform`, `icc_profile` | any other APPn (EXIF APP1, XMP APP1, Photoshop/IPTC APP13, MPF APP2, …), `comment`, any other `info` key |
    | PNG | `info` keys `icc_profile`, `dpi`, `gamma`, `transparency`, `srgb`, `chromaticity`, `aspect` | non-empty `img.text` (tEXt/zTXt/iTXt, which includes XMP), `exif`, any other `info` key |
-   | WebP | `info` key `icc_profile` | `exif`, `xmp`, any other `info` key |
+   | WebP | RIFF chunks `VP8 `, `VP8L`, `VP8X`, `ALPH`, `ICCP` (scan the raw bytes, as for lossless detection in step 8; **not** Pillow's `info`) | any other chunk (`EXIF`, `XMP `, `ANIM`, `ANMF`, unknown) |
+   | MPO | — | always (MPF is metadata) |
 
-   An `info` key that isn't in the allowlist is treated as metadata, so an unknown key leads
-   to a re-encode rather than a leak. Re-encode when `force_reencode` is true or
-   `has_metadata` is true. Otherwise keep `raw` as-is.
+   An `info` key or chunk that isn't in the allowlist is treated as metadata, so an unknown one
+   leads to a re-encode rather than a leak. WebP is checked from its chunks because Pillow puts
+   container fields (`loop`, `background`, `timestamp`, `duration`) in `info` for **every**
+   WebP, including its own clean output, so an `info` allowlist would never pass. Re-encode
+   when `force_reencode` is true or `has_metadata` is true. Otherwise keep `raw` as-is.
 8. **Re-encode** (only when step 7 says so):
    - **Rotate first.** Apply `ImageOps.exif_transpose` so phone photos stay upright. Rotation
      can swap width and height.
@@ -784,7 +792,9 @@ Against the live stack, following `conftest.py`. Each item is one test:
 Also add **backend unit tests** in `tests/unit/` for:
 - `prepare_image` idempotence (§4.3 step 8 invariant): one case each for JPEG, PNG, lossy
   WebP and lossless WebP;
-- the `has_metadata` allowlist;
+- the `has_metadata` allowlist, including a WebP with an `EXIF` chunk (metadata) and a clean
+  Pillow-written WebP (not metadata);
+- a 2-image MPO input → `image/jpeg`, one frame, output opens as plain `JPEG` with no MPF;
 - `map_pin_distance` / `map_pin_fraction` / `map_pin_bucket`, including bucket 49 for
   `x = 1.0`.
 
@@ -939,3 +949,10 @@ Per `.claude/rules/context-sync.md`, update:
     - slowapi `request` parameter;
     - a defensive `calculate_score`.
   - Tests 13–15 and the backend unit tests were added.
+- 2026-10-04 — Implementation-time fixes (found probing Pillow 12.3):
+  - WebP `has_metadata` is decided from RIFF chunks, not `info`: Pillow sets
+    `loop`/`background`/`timestamp`/`duration` on every WebP, so the `info` allowlist broke the
+    idempotence invariant.
+  - MPO (multi-image JPEG from phones) is accepted as `image/jpeg`, skips the animation check,
+    and is always re-encoded.
+  - Status line updated.
