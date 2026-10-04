@@ -340,3 +340,278 @@ def test_get_requires_auth(t4: T4World):
     meta = upload_ok(t4, png())
     r = httpx.get(f"{t4.base_url}/api/images/{meta['id']}", timeout=10.0)
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Question helpers
+# ---------------------------------------------------------------------------
+
+
+def map_pin_question(
+    image_id: str,
+    *,
+    grading_type: str = "ACCURACY",
+    target: tuple[float, float] = (0.5, 0.5),
+    full: float = 0.04,
+    zero: float = 0.15,
+    points: float = 10,
+    prompt: str = "Where is Denver?",
+    **config_extra,
+) -> dict:
+    return {
+        "type": "map_pin",
+        "grading_type": grading_type,
+        "prompt": prompt,
+        "config": {"imageId": image_id, **config_extra},
+        "answer_data": {
+            "targets": [{"x": target[0], "y": target[1]}],
+            "fullRadius": full,
+            "zeroRadius": zero,
+        },
+        "points_value": points,
+        "time_limit_seconds": 30,
+    }
+
+
+def create_q(
+    t4: T4World,
+    game_id: int,
+    body: dict,
+    token: str | None = None,
+    *,
+    host: bool = False,
+) -> httpx.Response:
+    prefix = "/host" if host else "/admin"
+    return t4.request("POST", f"{prefix}/games/{game_id}/questions", token, json=body)
+
+
+def update_q(
+    t4: T4World,
+    game_id: int,
+    question_id: int,
+    body: dict,
+    token: str | None = None,
+    *,
+    host: bool = False,
+) -> httpx.Response:
+    prefix = "/host" if host else "/admin"
+    return t4.request(
+        "PUT", f"{prefix}/games/{game_id}/questions/{question_id}", token, json=body
+    )
+
+
+def list_qs(t4: T4World, game_id: int) -> dict[int, dict]:
+    r = t4.request("GET", f"/admin/games/{game_id}/questions")
+    assert r.status_code == 200, r.text
+    return {q["id"]: q for q in r.json()}
+
+
+def assert_validation_error(r: httpx.Response) -> None:
+    assert r.status_code == 422, r.text
+    assert r.json().get("error") == "VALIDATION_ERROR", r.text
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — create validation
+# ---------------------------------------------------------------------------
+
+
+def test_create_map_pin_stores_server_dimensions(t4: T4World):
+    game = t4.game(t4.course())
+    img = upload_ok(t4, png((800, 400)))
+    r = create_q(t4, game, map_pin_question(img["id"], imageWidth=5, imageHeight=5))
+    assert r.status_code == 201, r.text
+    assert r.json()["config"] == {
+        "imageId": img["id"],
+        "imageWidth": 800,
+        "imageHeight": 400,
+    }
+    assert r.json()["answer_data"]["targets"] == [{"x": 0.5, "y": 0.5}]
+
+
+def test_create_map_pin_missing_image(t4: T4World):
+    game = t4.game(t4.course())
+    assert_error(
+        create_q(t4, game, map_pin_question(str(uuid.uuid4()))), 422, "IMAGE_NOT_FOUND"
+    )
+    # Not UUID-shaped is allowed by the schema; it just doesn't exist.
+    assert_error(create_q(t4, game, map_pin_question("map1")), 422, "IMAGE_NOT_FOUND")
+
+
+def _mutations(image_id: str) -> dict[str, dict]:
+    base = map_pin_question(image_id)
+
+    def with_answer(**changes) -> dict:
+        return {**base, "answer_data": {**base["answer_data"], **changes}}
+
+    def with_config(**changes) -> dict:
+        return {**base, "config": {**base["config"], **changes}}
+
+    return {
+        "zero-targets": with_answer(targets=[]),
+        "two-targets": with_answer(
+            targets=[{"x": 0.1, "y": 0.1}, {"x": 0.2, "y": 0.2}]
+        ),
+        "full-equals-zero": with_answer(fullRadius=0.1, zeroRadius=0.1),
+        "full-above-zero": with_answer(fullRadius=0.2, zeroRadius=0.1),
+        "full-below-floor": with_answer(fullRadius=0.019, zeroRadius=0.1),
+        "zero-above-2": with_answer(zeroRadius=2.01),
+        "x-bool": with_answer(targets=[{"x": True, "y": 0.5}]),
+        "x-out-of-range": with_answer(targets=[{"x": 1.5, "y": 0.5}]),
+        "x-string": with_answer(targets=[{"x": "0.5", "y": 0.5}]),
+        "target-extra-key": with_answer(targets=[{"x": 0.5, "y": 0.5, "z": 0}]),
+        "answer-extra-key": with_answer(hint="near the rockies"),
+        "missing-radius": {**base, "answer_data": {"targets": [{"x": 0.5, "y": 0.5}]}},
+        "imageWidth-string": with_config(imageWidth="abc"),
+        "imageWidth-bool": with_config(imageWidth=True),
+        "imageWidth-zero": with_config(imageWidth=0),
+        "config-extra-key": with_config(caption="x"),
+        "imageId-missing": {**base, "config": {}},
+        "imageId-too-long": with_config(imageId="x" * 65),
+        "completeness-no-target": {
+            **base,
+            "grading_type": "COMPLETENESS",
+            "answer_data": {},
+        },
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_mutations("x")))
+def test_create_map_pin_rejects(t4: T4World, case: str):
+    game = t4.game(t4.course())
+    img = upload_ok(t4, png())
+    assert_validation_error(create_q(t4, game, _mutations(img["id"])[case]))
+    assert list_qs(t4, game) == {}
+
+
+def test_create_map_pin_completeness_with_target(t4: T4World):
+    game = t4.game(t4.course())
+    img = upload_ok(t4, png())
+    r = create_q(t4, game, map_pin_question(img["id"], grading_type="COMPLETENESS"))
+    assert r.status_code == 201, r.text
+
+
+def test_create_map_pin_accepts_boundaries(t4: T4World):
+    game = t4.game(t4.course())
+    img = upload_ok(t4, png())
+    for body in (
+        map_pin_question(img["id"], target=(0, 1), full=0.02, zero=2),
+        map_pin_question(img["id"], target=(1, 0), full=1, zero=1.5),
+    ):
+        r = create_q(t4, game, body)
+        assert r.status_code == 201, r.text
+
+
+def test_host_create_map_pin(t4: T4World):
+    course = t4.course()
+    game = t4.game(course)
+    host = t4.user()
+    t4.grant_course(host, course)
+    img = upload_ok(t4, png((300, 600)), token=host.token, host_course=course)
+    r = create_q(t4, game, map_pin_question(img["id"]), host.token, host=True)
+    assert r.status_code == 201, r.text
+    assert r.json()["config"]["imageHeight"] == 600
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — update symmetry (admin and host routes)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["admin", "host"])
+def editor(request, t4: T4World):
+    """(t4, game_id, token, host flag) for the admin or a course host."""
+    course = t4.course()
+    game = t4.game(course)
+    if request.param == "admin":
+        return game, None, False
+    host = t4.user()
+    t4.grant_course(host, course)
+    return game, host.token, True
+
+
+def test_update_invalid_answer_data_rejected_row_unchanged(t4: T4World, editor):
+    game, token, host = editor
+    img = upload_ok(t4, png())
+    q = create_q(t4, game, map_pin_question(img["id"])).json()
+
+    r = update_q(t4, game, q["id"], {"answer_data": {"targets": []}}, token, host=host)
+    assert_validation_error(r)
+    assert list_qs(t4, game)[q["id"]]["answer_data"] == q["answer_data"]
+
+
+def test_update_type_change_without_config_rejected(t4: T4World, editor):
+    game, token, host = editor
+    mc = create_q(t4, game, t4_helpers.MC_QUESTION).json()
+
+    r = update_q(t4, game, mc["id"], {"type": "map_pin"}, token, host=host)
+    assert_validation_error(r)
+    assert list_qs(t4, game)[mc["id"]]["type"] == "multiple_choice"
+
+
+def test_update_valid_map_pin(t4: T4World, editor):
+    game, token, host = editor
+    img = upload_ok(t4, png((800, 400)))
+    other = upload_ok(t4, png((100, 300)))
+    q = create_q(t4, game, map_pin_question(img["id"])).json()
+
+    r = update_q(
+        t4,
+        game,
+        q["id"],
+        {
+            "prompt": "Where is <b>Boise</b>?<script>x</script>",
+            "config": {"imageId": other["id"], "imageWidth": 1},
+            "answer_data": {
+                "targets": [{"x": 0.2, "y": 0.3}],
+                "fullRadius": 0.05,
+                "zeroRadius": 0.2,
+            },
+        },
+        token,
+        host=host,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["config"] == {
+        "imageId": other["id"],
+        "imageWidth": 100,
+        "imageHeight": 300,
+    }
+    assert body["answer_data"]["targets"] == [{"x": 0.2, "y": 0.3}]
+    assert "<script>" not in body["prompt"]
+    assert "<b>Boise</b>" in body["prompt"]
+
+
+def test_update_prompt_only_keeps_map_pin(t4: T4World, editor):
+    game, token, host = editor
+    img = upload_ok(t4, png((800, 400)))
+    q = create_q(t4, game, map_pin_question(img["id"])).json()
+    r = update_q(t4, game, q["id"], {"prompt": "Where is Austin?"}, token, host=host)
+    assert r.status_code == 200, r.text
+    assert r.json()["config"] == q["config"]
+    assert r.json()["answer_data"] == q["answer_data"]
+
+
+def test_update_missing_image_rejected(t4: T4World, editor):
+    game, token, host = editor
+    img = upload_ok(t4, png())
+    q = create_q(t4, game, map_pin_question(img["id"])).json()
+    r = update_q(
+        t4, game, q["id"], {"config": {"imageId": str(uuid.uuid4())}}, token, host=host
+    )
+    assert_error(r, 422, "IMAGE_NOT_FOUND")
+    assert list_qs(t4, game)[q["id"]]["config"] == q["config"]
+
+
+def test_update_other_types_still_validated(t4: T4World, editor):
+    """The merged-validation fix applies to every type, not just map_pin."""
+    game, token, host = editor
+    mc = create_q(t4, game, t4_helpers.MC_QUESTION).json()
+    r = update_q(
+        t4, game, mc["id"], {"answer_data": {"answer_points": [1]}}, token, host=host
+    )
+    assert_validation_error(r)
+    r = update_q(t4, game, mc["id"], {"prompt": "Renamed"}, token, host=host)
+    assert r.status_code == 200, r.text
+    assert r.json()["answer_data"] == mc["answer_data"]
