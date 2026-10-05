@@ -15,6 +15,7 @@ PLAYER_JOINED = "player_joined"
 PLAYER_LEFT = "player_left"
 HOST_DISCONNECTED = "host_disconnected"
 GAME_ABANDONED = "game_abandoned"
+GAME_IMAGES = "game_images"  # {imageIds}: map images to preload, sent at start
 
 # Server → specific client
 ANSWER_RECEIVED = "answer_received"

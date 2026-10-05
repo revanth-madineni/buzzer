@@ -25,8 +25,8 @@ There's no `types/` directory. Each page declares its own response interfaces in
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
-| `lib/` | `api.ts` REST wrapper with `get`/`post`/`put`/`patch`/`delete`, `postForm` (multipart upload) and `download` (Blob + `Content-Disposition` filename), showing the server's error `message`; `cn()`. No role logic. Identical to the host app's. |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), byte-identical to the host app's, and `MoveGamePanel` (the move/assign-with-preview flow shared by `GamesPage` and `AccessPage`). |
+| `lib/` | `api.ts` REST wrapper with `get`/`post`/`put`/`patch`/`delete`, `postForm` (multipart upload) and `download` (Blob + `Content-Disposition` filename), showing the server's error `message`; `cn()`; (T7) `mapPin.ts` and `images.ts`, byte-identical across all three apps. No role logic. `api.ts` is identical to the host app's. |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), byte-identical to the host app's, `MoveGamePanel` (the move/assign-with-preview flow shared by `GamesPage` and `AccessPage`), and (T7) `MapCanvas` for placing map-pin targets. |
 | `pages/` | One self-contained page per route (`useState` + `load()`, no shared store). |
 
 ## How it fits together
@@ -94,9 +94,9 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
   notifying players. User/guest delete removes their scores. Guest merge may promote the
   guest in place.
 - **Question edits during a live game are refused** server-side (409 `GAME_LIVE`), as is
-  deleting an answered question (409 `QUESTION_HAS_ANSWERS`). The backend still doesn't
-  validate structure on edit. `points_value` is derived client-side and can include blank
-  options that were dropped from the payload. Answer-data keys mix `answer_points` (snake_case)
+  deleting an answered question (409 `QUESTION_HAS_ANSWERS`). Since T7 the backend
+  validates the whole merged question on edit. `points_value` is derived client-side and can
+  include blank options that were dropped from the payload. Answer-data keys mix `answer_points` (snake_case)
   with fill-in-the-blank's camelCase, so a new question type touches this app, the backend,
   and both game frontends.
 - **Literal `…` / `±` render on screen** in five JSX text spots (`pages/CLAUDE.md`).

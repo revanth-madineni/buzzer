@@ -1,10 +1,10 @@
 # frontend/host/src/components/
 
 ## Purpose
-Presentational building blocks for the host (big-screen) app. Everything lives under `ui/`:
-three shadcn-style primitives styled with Tailwind for the dark slate theme, plus the
-per-question countdown bar. No data fetching, socket access, game state, or role/course logic
-here.
+Presentational building blocks for the host (big-screen) app: three shadcn-style primitives
+styled with Tailwind for the dark slate theme and the per-question countdown bar (under
+`ui/`), plus the map canvas and results heatmap (T7). No socket access, game state, or
+role/course logic here; the map canvas loads its image through `lib/images.ts`.
 
 ## Contents
 - `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default | outline | ghost |
@@ -17,6 +17,15 @@ here.
   it freezes the remaining time and resumes from it. The bar width is always
   `timeLeft / totalSeconds`, so a mid-question start shows a partly drained bar.
 
+- `MapCanvas.tsx` (T7) — the shared map canvas, byte-identical to the player's and admin's
+  copies (see `frontend/player/src/components/CLAUDE.md`): contain-fit, DPR-scaled,
+  resize-aware, "Loading map…" / Retry, optional pointer input that ignores letterbox starts
+  and clamps drags.
+- `MapPinHeatmap.tsx` (T7) — results view for a map_pin question: the image, one translucent
+  dot per distribution key `"bx,by"` at the cell centre `((bx + 0.5) / 50, (by + 0.5) / 50)`
+  with radius ∝ √count (so area grows with count), then the target and both radius circles on
+  top. Same view for both grading types.
+
 ## How it fits in
 - `pages/LoginPage.tsx` uses `Button`, `Input`, and `Card*`. `pages/HomePage.tsx` uses
   `Button` and `Card*`. `LobbyPage`, `QuestionPage`, `ResultsPage`, and `GameOverPage` under
@@ -28,6 +37,9 @@ here.
   computed from `startedAt` (only sent in the `sync_state` reconnect payload), otherwise the
   full limit.
 - `lib/utils.ts` supplies `cn`. See `lib/CLAUDE.md`.
+- `pages/game/ResultsPage.tsx` uses `MapPinHeatmap`; `pages/manage/QuestionEditorPage.tsx`
+  uses `MapCanvas` directly (`heightCap={0.7}`) to place the target.
+- The heatmap's 50-cell grid must match `game_service.map_pin_bucket` on the server.
 
 ## Gotchas
 - **`TimerBar` is display-only and not synced to the server.** The server's timer task decides

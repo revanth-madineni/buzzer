@@ -1,6 +1,6 @@
 # T7 — Map Pin Question Type (classroom, canvas)
 
-Status: agreed design, not yet goldfish-tested. Written 2026-10-04.
+Status: agreed design, goldfish-tested and revised. Written 2026-10-04.
 Scope: one of the two T7 types (the classroom one). The party type is a teammate's separate spec.
 Also delivers the minimal image storage that T8 builds on.
 
@@ -134,12 +134,17 @@ The steps run in this order:
 1. `len(raw) > 2 * 1024 * 1024` → 413 `IMAGE_TOO_LARGE` (2 MB cap on the input bytes).
 2. `PILImage.open(BytesIO(raw))`. This reads only the header. Any exception → 422
    `INVALID_IMAGE`. **SVG, HTML and plain text land here**: Pillow can't open them at all.
-3. Map `format` → mime: `PNG→image/png`, `JPEG→image/jpeg`, `WEBP→image/webp`. Any other
-   format Pillow can open (GIF, BMP, TIFF, …) → 415 `UNSUPPORTED_IMAGE_TYPE`. **The mime comes
-   from the decoded format, never from the client's declared Content-Type or file
-   extension.** The output keeps the same format.
+3. Map `format` → mime: `PNG→image/png`, `JPEG→image/jpeg`, `MPO→image/jpeg`,
+   `WEBP→image/webp`. Any other format Pillow can open (GIF, BMP, TIFF, …) → 415
+   `UNSUPPORTED_IMAGE_TYPE`. **The mime comes from the decoded format, never from the client's
+   declared Content-Type or file extension.** The output keeps the same format (MPO is saved as
+   JPEG).
+   - **MPO** is what Pillow reports for a JPEG whose MPF segment holds 2+ images (common in
+     phone photos with a depth map or HDR gain map). It is treated as a JPEG: only the primary
+     image is kept, and it is **always re-encoded** (step 7), which drops the MPF segment and
+     the secondary images.
 4. **Reject animation:** `getattr(img, "is_animated", False)` or `getattr(img, "n_frames", 1) > 1`
-   → 415 `UNSUPPORTED_IMAGE_TYPE`.
+   → 415 `UNSUPPORTED_IMAGE_TYPE`. **Skipped for MPO**, whose extra frames are not animation.
 5. **Check dimensions before decoding** (header size, before any rotation): `width` or `height`
    < 1 or > 8000, or `width × height` > 40,000,000 → 422 `INVALID_IMAGE`. This is the
    decompression-bomb guard, and it runs before `load()`, so oversized images are never
@@ -154,11 +159,18 @@ The steps run in this order:
    |---|---|---|
    | JPEG | APP0 `JFIF`, APP2 `ICC_PROFILE`, APP14 `Adobe` segments (check `img.applist`). `info` keys `jfif`, `jfif_version`, `jfif_unit`, `jfif_density`, `dpi`, `progressive`, `progression`, `adobe`, `adobe_transform`, `icc_profile` | any other APPn (EXIF APP1, XMP APP1, Photoshop/IPTC APP13, MPF APP2, …), `comment`, any other `info` key |
    | PNG | `info` keys `icc_profile`, `dpi`, `gamma`, `transparency`, `srgb`, `chromaticity`, `aspect` | non-empty `img.text` (tEXt/zTXt/iTXt, which includes XMP), `exif`, any other `info` key |
-   | WebP | `info` key `icc_profile` | `exif`, `xmp`, any other `info` key |
+   | WebP | RIFF chunks `VP8 `, `VP8L`, `VP8X`, `ALPH`, `ICCP` (scan the raw bytes, as for lossless detection in step 8; **not** Pillow's `info`) | any other chunk (`EXIF`, `XMP `, `ANIM`, `ANMF`, unknown) |
+   | MPO | — | always (MPF is metadata) |
 
-   An `info` key that isn't in the allowlist is treated as metadata, so an unknown key leads
-   to a re-encode rather than a leak. Re-encode when `force_reencode` is true or
-   `has_metadata` is true. Otherwise keep `raw` as-is.
+   An `info` key or chunk that isn't in the allowlist is treated as metadata, so an unknown one
+   leads to a re-encode rather than a leak. WebP is checked from its chunks because Pillow puts
+   container fields (`loop`, `background`, `timestamp`, `duration`) in `info` for **every**
+   WebP, including its own clean output, so an `info` allowlist would never pass.
+   **Trailing data is metadata** for every format: bytes after the JPEG `EOI` marker, after
+   the PNG `IEND` chunk, or outside the WebP RIFF length (or a chunk walk that doesn't end
+   exactly at the end of the file) set `has_metadata`, so a bundle can't smuggle data past
+   the end of an image. Pillow's output ends cleanly, so the invariant below holds. Re-encode
+   when `force_reencode` is true or `has_metadata` is true. Otherwise keep `raw` as-is.
 8. **Re-encode** (only when step 7 says so):
    - **Rotate first.** Apply `ImageOps.exif_transpose` so phone photos stay upright. Rotation
      can swap width and height.
@@ -206,8 +218,10 @@ Functions:
 - **Both POSTs:**
   - Decorate with `@limiter.limit("30/minute")`. slowapi requires the handler to take a
     `request: Request` parameter (see `routers/auth.py` `login`).
-  - Call `image_service.store_image` with `await file.read()`. The request's `get_db`
-    commits.
+  - Call `image_service.store_image` with `await file.read()`, then **`await db.commit()`
+    explicitly before returning**. `get_db`'s own commit runs only after the response has
+    been sent (FastAPI request-scoped `yield` dependencies), so without it a client that
+    GETs the image right after the 201 can get a 404.
   - The 2 MB check in `prepare_image` is the authoritative per-file rule. Checking size
     inside the handler cannot prevent buffering, because Starlette has already spooled the
     whole multipart body by then. Request size is bounded **before** parsing by the body
@@ -239,11 +253,12 @@ body is parsed before dependencies run. Instead:
   `client_max_body_size 26m;` to the `location /api/` block.
 - **Production:** whoever owns the production proxy (Traefik, outside this repo) needs the
   same ≥ 26 MB allowance on `/api/`. Record this in `backend/CLAUDE.md` Gotchas.
-- **Import:** keeps its "files over 25 MB → 422" check on the bytes it read. The middleware
-  is what stops a 1 GB upload.
+- **Import:** adds a "files over 25 MB → 422" check (there was none before T7), using the
+  upload's size before reading and the bytes read after. The middleware is what stops a 1 GB
+  upload.
 
 Schema `ImageResponse` (in `schemas/admin.py`, reused by host): `id`, `mime_type`, `width`,
-`height`, `byte_size`. Never the data.
+`height`, `byte_size`, `sha256`. Never the data.
 
 **Access decision:** the GET has no course check. Anyone who knows an ID can read the image.
 Security comes from IDs being unguessable UUIDs and from having no listing. This is acceptable
@@ -292,11 +307,13 @@ defaults (0.04 / 0.15) are higher (§4.12).
 
 **Update-path fix (all types).** Today `update_question` copies non-null fields onto the model
 with no structural check (`schemas/CLAUDE.md` gotcha). New behaviour:
-1. Build `merged` from the existing question's seven input fields, which are exactly
-   `QuestionCreate`'s fields: `type`, `grading_type`, `prompt`, `config`, `answer_data`,
-   `time_limit_seconds`, `points_value`. Overlay the PUT's non-null fields.
-   - `QuestionCreate` has no `game_id` or `order_index`; those come from the URL and the
-     service.
+1. Build `merged` from the existing question's seven content fields: `type`,
+   `grading_type`, `prompt`, `config`, `answer_data`, `time_limit_seconds`,
+   `points_value`. Overlay the PUT's non-null values for those fields.
+   - `QuestionCreate` has no `game_id` (it comes from the URL). It **does** have an optional
+     `order_index`, as does `QuestionUpdate`, but that is positional, not content: it is left
+     out of `merged` (so it defaults to `None` during validation) and, when the PUT carries
+     it, applied to the row as before.
    - `config` and `answer_data` are **replaced** whole, not deep-merged. They are the only
      fields a PUT could want to "clear", and sending `{}` does that, because `{}` is not
      null. All other question columns are NOT NULL, so "non-null fields only" loses nothing.
@@ -452,7 +469,9 @@ Bump `_SUPPORTED_IMPORT_VERSION` handling:
     1. **Image list shape.** v1 bundles may not contain `images`. In v2 it is optional and holds
        at most 50 entries. Each entry needs a unique `id` (a non-empty string of at most 64
        characters; any string, not just UUIDs, so hand-made bundles can use `"map1"`), a
-       `mime_type` (informational; the decoded format wins) and a `data` string.
+       `mime_type` (informational; the decoded format wins) and a `data` string. Other keys
+       in an entry are ignored, so a later bundle version can add fields that older servers
+       skip.
     2. **Questions.** Run `QuestionCreate` on each question, as today.
     3. **References.** Every `map_pin` question's `config.imageId` must be one of the bundle's
        image `id`s. Otherwise 422 `"Question {n} references image {id} not in bundle"`.
@@ -700,7 +719,7 @@ Against the live stack, following `conftest.py`. Each item is one test:
      The GET bytes have no EXIF (re-open with Pillow: `getexif()` is empty, and there's no
      `exif` in `info`).
    - The stored `width`/`height` are 200×400 (rotated upright).
-   - `byte_size` and `sha256` match the returned bytes.
+   - `byte_size` and `sha256` in the upload response match the returned bytes.
    - A PNG with a `tEXt` chunk comes back without it.
    - A JPEG with an ICC profile keeps it.
    - A JPEG with only a Photoshop APP13 (IPTC) segment comes back without it.
@@ -755,7 +774,8 @@ Against the live stack, following `conftest.py`. Each item is one test:
     - Import it → new game, new image ID (≠ source), questions point to the new ID, and the
       bytes are identical.
     - A bundle whose question references a missing image → 422, with **no** game or image rows
-      created.
+      created. There is no image list endpoint, so the test counts `images` rows in the
+      compose MySQL.
     - A v1 bundle with no map-pin questions still imports.
     - A hand-made v2 bundle whose image carries GPS EXIF → the stored image has no EXIF.
 12. **Preloading:**
@@ -784,7 +804,9 @@ Against the live stack, following `conftest.py`. Each item is one test:
 Also add **backend unit tests** in `tests/unit/` for:
 - `prepare_image` idempotence (§4.3 step 8 invariant): one case each for JPEG, PNG, lossy
   WebP and lossless WebP;
-- the `has_metadata` allowlist;
+- the `has_metadata` allowlist, including a WebP with an `EXIF` chunk (metadata) and a clean
+  Pillow-written WebP (not metadata);
+- a 2-image MPO input → `image/jpeg`, one frame, output opens as plain `JPEG` with no MPF;
 - `map_pin_distance` / `map_pin_fraction` / `map_pin_bucket`, including bucket 49 for
   `x = 1.0`.
 
@@ -939,3 +961,19 @@ Per `.claude/rules/context-sync.md`, update:
     - slowapi `request` parameter;
     - a defensive `calculate_score`.
   - Tests 13–15 and the backend unit tests were added.
+- 2026-10-04 — Implementation-time fixes (found probing Pillow 12.3):
+  - WebP `has_metadata` is decided from RIFF chunks, not `info`: Pillow sets
+    `loop`/`background`/`timestamp`/`duration` on every WebP, so the `info` allowlist broke the
+    idempotence invariant.
+  - MPO (multi-image JPEG from phones) is accepted as `image/jpeg`, skips the animation check,
+    and is always re-encoded.
+  - Status line updated.
+- 2026-10-04 — Step 1 implementation fixes:
+  - Upload handlers commit explicitly before responding (`get_db` commits after the response
+    is sent, so an immediate GET raced the commit and 404'd).
+  - Trailing data after the end of an image counts as metadata.
+  - `ImageResponse` includes `sha256`.
+- 2026-10-04 — Corrected §4.5: `QuestionCreate` and `QuestionUpdate` both have an optional
+  `order_index`; it stays out of the merged validation and is applied from the PUT.
+- 2026-10-04 — Step 4: import's 25 MB check is new, not kept; extra keys in bundle image
+  entries are ignored; test 11 counts image rows in MySQL.

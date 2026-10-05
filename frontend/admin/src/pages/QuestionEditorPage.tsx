@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Download } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
+import { MapCanvas } from '../components/MapCanvas';
+import { drawTarget, type DrawRect, type Point } from '../lib/mapPin';
 
-type QuestionType = 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
+type QuestionType = 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select' | 'map_pin';
 type GradingType = 'ACCURACY' | 'COMPLETENESS';
 
 interface Question {
@@ -21,7 +23,12 @@ interface Question {
   order_index: number;
 }
 
-interface Game { id: number; title: string }
+interface Game { id: number; title: string; course_id?: number | null }
+
+/** POST .../images response (never includes the bytes). */
+interface ImageInfo { id: string; mime_type: string; width: number; height: number; byte_size: number }
+
+type UploadImage = (file: File) => Promise<ImageInfo>;
 
 // ---- helpers for building config/answer_data per type ----
 
@@ -79,6 +86,33 @@ interface FormState {
   fibEditDistance: number;
   // multi_select
   msOptions: McOption[];
+  // map_pin (T7): target as image fractions, radii in image-width units
+  imageId: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  targetX: number | null;
+  targetY: number | null;
+  fullRadius: number;
+  zeroRadius: number;
+}
+
+// Server limits (backend schemas/admin.py). The editor defaults are higher than the floor.
+const MAP_PIN_MIN_FULL_RADIUS = 0.02;
+const MAP_PIN_MAX_ZERO_RADIUS = 2;
+const MAP_PIN_EASY_FULL_RADIUS = 0.04;
+const MAP_PIN_SLIDER_MAX = 0.5;
+
+/** Why a map_pin form can't be saved (same rules for both grading types), or null. */
+function mapPinFormError(form: FormState): string | null {
+  if (!form.imageId) return 'Upload an image for this map pin question.';
+  if (form.targetX === null || form.targetY === null) return 'Click the image to set the target.';
+  if (!(form.fullRadius >= MAP_PIN_MIN_FULL_RADIUS))
+    return `Full-credit radius must be at least ${MAP_PIN_MIN_FULL_RADIUS}.`;
+  if (!(form.zeroRadius > form.fullRadius))
+    return 'Zero-credit radius must be larger than the full-credit radius.';
+  if (!(form.zeroRadius <= MAP_PIN_MAX_ZERO_RADIUS))
+    return `Zero-credit radius must be at most ${MAP_PIN_MAX_ZERO_RADIUS}.`;
+  return null;
 }
 
 const defaultForm = (): FormState => ({
@@ -93,6 +127,13 @@ const defaultForm = (): FormState => ({
   fibAnswers: [{ text: '', points: 1 }],
   fibEditDistance: 0,
   msOptions: [{ text: '', points: 1 }, { text: '', points: 1 }],
+  imageId: null,
+  imageWidth: null,
+  imageHeight: null,
+  targetX: null,
+  targetY: null,
+  fullRadius: 0.04,
+  zeroRadius: 0.15,
 });
 
 function questionToForm(q: Question): FormState {
@@ -125,6 +166,21 @@ function questionToForm(q: Question): FormState {
     base.msOptions = opts.length
       ? opts.map((text, i) => ({ text, points: pts[i] ?? 1 }))
       : [{ text: '', points: 1 }, { text: '', points: 1 }];
+  } else if (q.type === 'map_pin') {
+    const cfg = q.config as { imageId?: string; imageWidth?: number; imageHeight?: number };
+    const ad = q.answer_data as {
+      targets?: { x: number; y: number }[];
+      fullRadius?: number;
+      zeroRadius?: number;
+    };
+    base.imageId = cfg.imageId ?? null;
+    base.imageWidth = cfg.imageWidth ?? null;
+    base.imageHeight = cfg.imageHeight ?? null;
+    base.targetX = ad.targets?.[0]?.x ?? null;
+    base.targetY = ad.targets?.[0]?.y ?? null;
+    // Kept exactly as stored, even above the slider's range (e.g. from an import).
+    base.fullRadius = ad.fullRadius ?? base.fullRadius;
+    base.zeroRadius = ad.zeroRadius ?? base.zeroRadius;
   }
   return base;
 }
@@ -144,13 +200,22 @@ function formToPayload(form: FormState) {
     const p = buildMsPayload(form.msOptions.filter((o) => o.text.trim()));
     config = p.config;
     answer_data = p.answer_data;
+  } else if (form.type === 'map_pin') {
+    // Same answer_data for both grading types: both show the same reveal. The server
+    // fills in imageWidth/imageHeight from the stored image.
+    config = { imageId: form.imageId };
+    answer_data = {
+      targets: [{ x: form.targetX, y: form.targetY }],
+      fullRadius: form.fullRadius,
+      zeroRadius: form.zeroRadius,
+    };
   } else {
     const p = buildFibPayload(form.fibAnswers.filter((a) => a.text.trim()), form.fibEditDistance);
     config = p.config;
     answer_data = p.answer_data;
   }
   const points_value =
-    form.grading === 'COMPLETENESS'
+    form.grading === 'COMPLETENESS' || form.type === 'map_pin'
       ? form.pointsValue
       : form.type === 'multiple_choice'
       ? Math.max(0, ...form.mcOptions.map((o) => o.points))
@@ -170,18 +235,164 @@ function formToPayload(form: FormState) {
   };
 }
 
+/** A radius: number input (source of truth, full server range) + slider (0.02–0.5). */
+function RadiusInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex-1">
+      <label className="block text-xs text-slate-400 mb-1">{label}</label>
+      <div className="flex items-center gap-2">
+        <input
+          type="range"
+          min={MAP_PIN_MIN_FULL_RADIUS}
+          max={MAP_PIN_SLIDER_MAX}
+          step={0.005}
+          value={Math.min(value, MAP_PIN_SLIDER_MAX)}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="flex-1 accent-indigo-500"
+        />
+        <Input
+          type="number"
+          min={MAP_PIN_MIN_FULL_RADIUS}
+          max={MAP_PIN_MAX_ZERO_RADIUS}
+          step={0.005}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="w-24 text-sm"
+        />
+      </div>
+    </div>
+  );
+}
+
+function MapPinFields({
+  form,
+  set,
+  uploadImage,
+}: {
+  form: FormState;
+  set: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  uploadImage: UploadImage;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+
+  async function handleFile(file: File | undefined) {
+    if (!file) return;
+    setUploading(true);
+    setUploadError('');
+    try {
+      // "Replace image" = upload a new one; the old image row is left as it is.
+      const img = await uploadImage(file);
+      set('imageId', img.id);
+      set('imageWidth', img.width);
+      set('imageHeight', img.height);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const target: Point | null =
+    form.targetX !== null && form.targetY !== null ? { x: form.targetX, y: form.targetY } : null;
+  const draw = useCallback(
+    (ctx: CanvasRenderingContext2D, fit: DrawRect) => {
+      if (target) drawTarget(ctx, fit, target, form.fullRadius, form.zeroRadius);
+    },
+    // target is derived from targetX/targetY
+    [form.targetX, form.targetY, form.fullRadius, form.zeroRadius],
+  );
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="block text-xs text-slate-400 mb-1">
+          {form.imageId ? 'Replace image' : 'Upload image'} (PNG, JPEG or WebP, up to 2 MB)
+        </label>
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          disabled={uploading}
+          onChange={(e) => {
+            void handleFile(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+          className="block text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-700 file:px-3 file:py-1.5 file:text-slate-100"
+        />
+        {uploading && <p className="text-slate-400 text-xs mt-1">Uploading…</p>}
+        {uploadError && <p className="text-red-400 text-xs mt-1">{uploadError}</p>}
+      </div>
+
+      {form.imageId && form.imageWidth && form.imageHeight && (
+        <div>
+          <p className="text-xs text-slate-400 mb-1">
+            {target
+              ? `Target (${target.x.toFixed(3)}, ${target.y.toFixed(3)}) — click or drag to move it`
+              : 'Click the image to set the target'}
+          </p>
+          <MapCanvas
+            imageId={form.imageId}
+            imageWidth={form.imageWidth}
+            imageHeight={form.imageHeight}
+            heightCap={0.7}
+            draw={draw}
+            onPoint={(p) => {
+              set('targetX', p.x);
+              set('targetY', p.y);
+            }}
+          />
+        </div>
+      )}
+
+      <div className="flex gap-4">
+        <RadiusInput
+          label="Full-credit radius (fraction of image width)"
+          value={form.fullRadius}
+          onChange={(v) => set('fullRadius', v)}
+        />
+        <RadiusInput
+          label="Zero-credit radius"
+          value={form.zeroRadius}
+          onChange={(v) => set('zeroRadius', v)}
+        />
+      </div>
+      {form.fullRadius < MAP_PIN_EASY_FULL_RADIUS && form.fullRadius >= MAP_PIN_MIN_FULL_RADIUS && (
+        <p className="text-amber-400 text-xs">
+          A full-credit radius below {MAP_PIN_EASY_FULL_RADIUS} may be hard to hit on a phone.
+        </p>
+      )}
+      <p className="text-slate-500 text-xs">
+        Full points inside the solid circle, falling linearly to zero at the dashed circle.
+        {form.grading === 'COMPLETENESS' &&
+          ' Completeness: any tap gets full points; the target and circles are still shown at reveal.'}
+      </p>
+    </div>
+  );
+}
+
 function QuestionForm({
   initial,
   onSave,
   onCancel,
   saving,
+  uploadImage,
 }: {
   initial: FormState;
   onSave: (payload: ReturnType<typeof formToPayload>) => void;
   onCancel: () => void;
   saving: boolean;
+  uploadImage: UploadImage;
 }) {
   const [form, setForm] = useState<FormState>(initial);
+  const [formError, setFormError] = useState('');
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -202,6 +413,7 @@ function QuestionForm({
             <option value="true_false">True / False</option>
             <option value="fill_in_the_blank">Fill in the Blank</option>
             <option value="multi_select">Multi-Select (Select All That Apply)</option>
+            <option value="map_pin">Map pin (tap on image)</option>
           </select>
         </div>
         <div className="flex-1">
@@ -459,6 +671,8 @@ function QuestionForm({
         </div>
       )}
 
+      {form.type === 'map_pin' && <MapPinFields form={form} set={set} uploadImage={uploadImage} />}
+
       {/* Time + points */}
       <div className="flex gap-4">
         <div>
@@ -472,7 +686,7 @@ function QuestionForm({
             max="300"
           />
         </div>
-        {form.grading === 'COMPLETENESS' && (
+        {(form.grading === 'COMPLETENESS' || form.type === 'map_pin') && (
           <div>
             <label className="block text-xs text-slate-400 mb-1">Points value</label>
             <Input
@@ -488,14 +702,35 @@ function QuestionForm({
         )}
       </div>
 
+      {formError && <p className="text-red-400 text-sm">{formError}</p>}
       <div className="flex gap-3">
-        <Button type="button" onClick={() => onSave(formToPayload(form))} disabled={saving}>
+        <Button
+          type="button"
+          onClick={() => {
+            const blocked = form.type === 'map_pin' ? mapPinFormError(form) : null;
+            setFormError(blocked ?? '');
+            if (!blocked) onSave(formToPayload(form));
+          }}
+          disabled={saving}
+        >
           {saving ? 'Saving\u2026' : 'Save Question'}
         </Button>
         <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   );
+}
+
+/** List line: "Map pin — target (0.42, 0.37), r 0.04 → 0.15". */
+function mapPinSummary(q: Question): string {
+  const ad = q.answer_data as {
+    targets?: { x: number; y: number }[];
+    fullRadius?: number;
+    zeroRadius?: number;
+  };
+  const t = ad.targets?.[0];
+  const target = t ? `(${t.x.toFixed(2)}, ${t.y.toFixed(2)})` : '(not set)';
+  return `Map pin — target ${target}, r ${ad.fullRadius ?? '?'} → ${ad.zeroRadius ?? '?'}`;
 }
 
 // ---- Main page ----
@@ -528,6 +763,14 @@ export default function QuestionEditorPage() {
   }
 
   useEffect(() => { void load(); }, [gameId]);
+
+  /** Admin uploads go to /admin/images, tagged with the game's course if it has one. */
+  async function uploadImage(file: File): Promise<ImageInfo> {
+    const form = new FormData();
+    form.append('file', file);
+    if (game?.course_id != null) form.append('course_id', String(game.course_id));
+    return api.postForm<ImageInfo>('/admin/images', form);
+  }
 
   async function addQuestion(payload: ReturnType<typeof formToPayload>) {
     setSaving(true);
@@ -599,6 +842,7 @@ export default function QuestionEditorPage() {
     true_false: 'T/F',
     fill_in_the_blank: 'Fill',
     multi_select: 'Multi',
+    map_pin: 'Map',
   };
 
   if (loading) return <div className="p-8 text-slate-400">Loading\u2026</div>;
@@ -644,6 +888,7 @@ export default function QuestionEditorPage() {
               onSave={(payload) => void addQuestion(payload)}
               onCancel={() => setShowAddForm(false)}
               saving={saving}
+              uploadImage={uploadImage}
             />
           </CardContent>
         </Card>
@@ -668,6 +913,7 @@ export default function QuestionEditorPage() {
                     onSave={(payload) => void updateQuestion(q.id, payload)}
                     onCancel={() => setEditingId(null)}
                     saving={saving}
+                    uploadImage={uploadImage}
                   />
                 </CardContent>
               </>
@@ -740,6 +986,12 @@ export default function QuestionEditorPage() {
                       {(q.answer_data['editDistance'] as number) > 0 && (
                         <span className="ml-2 text-slate-500">(\u00b1{q.answer_data['editDistance'] as number} edit distance)</span>
                       )}
+                    </div>
+                  )}
+
+                  {q.type === 'map_pin' && (
+                    <div className="mt-2 text-xs text-slate-400">
+                      {mapPinSummary(q)}
                     </div>
                   )}
 

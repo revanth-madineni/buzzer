@@ -12,6 +12,8 @@ caller waited for the lock (REPEATABLE READ, spec §4.5).
 from __future__ import annotations
 
 import bleach
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +21,21 @@ from ..common.exceptions import BuzzerError, ConflictError
 from ..models.game import Game, Question
 from ..models.session import SessionScore
 from ..schemas.admin import QuestionCreate, QuestionUpdate
+from . import image_service
 
 PROMPT_TAGS = ["b", "i", "br", "u"]
+
+# The content fields a PUT is validated on, after merging (spec T7 §4.5). order_index is
+# positional, so it's applied from the PUT as before but not part of the merge.
+_CONTENT_FIELDS = (
+    "type",
+    "grading_type",
+    "prompt",
+    "config",
+    "answer_data",
+    "time_limit_seconds",
+    "points_value",
+)
 
 
 def sanitize_prompt(html: str) -> str:
@@ -36,9 +51,31 @@ async def list_questions(db: AsyncSession, game: Game) -> list[Question]:
     return list(result.scalars().all())
 
 
+async def resolve_map_pin_image(db: AsyncSession, body: QuestionCreate) -> None:
+    """For map_pin: 422 IMAGE_NOT_FOUND unless the image exists, then overwrite
+    config.imageWidth/imageHeight with its stored dimensions (in place). Images are
+    immutable, so the copy never goes stale and scoring never needs a DB read.
+
+    Called by create and update. Import doesn't call it: its images aren't stored yet
+    when questions are validated, so it sets dimensions from its own PreparedImages.
+    """
+    if body.type != "map_pin":
+        return
+    image_id = body.config["imageId"]
+    image = (await image_service.get_images_meta(db, {image_id})).get(image_id)
+    if image is None:
+        raise BuzzerError("IMAGE_NOT_FOUND", f"Image {image_id} not found", 422)
+    body.config = {
+        **body.config,
+        "imageWidth": image.width,
+        "imageHeight": image.height,
+    }
+
+
 async def create_question(
     db: AsyncSession, game: Game, body: QuestionCreate
 ) -> Question:
+    await resolve_map_pin_image(db, body)
     # Auto-assign order_index if not specified
     if body.order_index is None:
         result = await db.execute(
@@ -73,12 +110,32 @@ async def create_question(
 async def update_question(
     db: AsyncSession, question: Question, body: QuestionUpdate
 ) -> Question:
-    """Applies every non-null field. No whole-question re-validation ([Extra])."""
+    """Validates the whole merged question, so a PUT can't produce a question that
+    create would reject (T7 spec §4.5).
+
+    The PUT's non-null fields are overlaid on the existing question's content
+    fields; `config` and `answer_data` are replaced whole (send `{}` to clear one).
+    Then: schema validation (422 VALIDATION_ERROR), map_pin image resolution,
+    prompt sanitizing, apply. An existing question that create would reject can't
+    be PUT, even for a prompt-only change, until it is made valid.
+    """
+    # Locking read: the caller holds the game lock, and the merge must see edits
+    # committed while it waited (see module docstring).
+    await db.refresh(question, with_for_update=True)
     changes = body.model_dump(exclude_none=True)
-    if "prompt" in changes:
-        changes["prompt"] = sanitize_prompt(changes["prompt"])
-    for field, value in changes.items():
-        setattr(question, field, value)
+    merged = {field: getattr(question, field) for field in _CONTENT_FIELDS}
+    merged.update({k: v for k, v in changes.items() if k in _CONTENT_FIELDS})
+    try:
+        validated = QuestionCreate.model_validate(merged)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+    await resolve_map_pin_image(db, validated)
+    validated.prompt = sanitize_prompt(validated.prompt)
+    for field in _CONTENT_FIELDS:
+        setattr(question, field, getattr(validated, field))
+    if "order_index" in changes:
+        question.order_index = changes["order_index"]
     await db.flush()
     return question
 

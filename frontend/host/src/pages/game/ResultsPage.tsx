@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
+import { MapPinHeatmap } from '../../components/MapPinHeatmap';
 import type { AnswerReveal } from '../../types/game';
 
 const RESULTS_DISPLAY_SECONDS = 10;
@@ -237,9 +238,11 @@ export default function ResultsPage() {
   }, [autoAdvance, questionResults, emitAdvance]);
 
   const isFitb = currentQuestion?.type === 'fill_in_the_blank';
+  const mapReveal =
+    questionResults?.answerReveal.type === 'map_pin' ? questionResults.answerReveal : null;
 
   const bars =
-    !isFitb && questionResults
+    !isFitb && !mapReveal && questionResults
       ? buildBars(
           questionResults.answerReveal,
           questionResults.answerDistribution,
@@ -259,7 +262,19 @@ export default function ResultsPage() {
         </p>
       )}
 
-      {questionResults && isFitb ? (
+      {questionResults && mapReveal ? (
+        <div className="w-full max-w-4xl flex flex-col gap-2">
+          <MapPinHeatmap reveal={mapReveal} distribution={questionResults.answerDistribution} />
+          {mapReveal.gradingType === 'COMPLETENESS' && (
+            <p className="text-center text-amber-400 text-base">
+              Participation — full credit for answering
+            </p>
+          )}
+          <p className="text-slate-500 text-sm text-right">
+            {questionResults.totalAnswered} / {questionResults.totalPlayers} answered
+          </p>
+        </div>
+      ) : questionResults && isFitb ? (
         <WordCloud
           distribution={questionResults.answerDistribution}
           answerReveal={questionResults.answerReveal}

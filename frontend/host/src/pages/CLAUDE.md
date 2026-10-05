@@ -40,7 +40,12 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
     admin app's `QuestionEditorPage`**, pointed at `/host/games/{id}/questions…`, with
     "Back" → this course's games and no JSON export (hosts have no export endpoint). The form
     logic (`FormState`, `formToPayload`, the `points_value` derivation) must be kept in step
-    with the admin copy by hand.
+    with the admin copy by hand. Map pin (T7): image upload to
+    `/host/courses/{courseId}/images` (the only difference from the admin copy's
+    `uploadImage`), click/drag the image to set the target, radius number inputs (source of
+    truth, 0.02–2) paired with 0.02–0.5 sliders, a warning below 0.04, and saving blocked
+    without an image and target for both grading types. Map pin questions take an entered
+    points value. "Replace image" uploads a new one; the target fractions are kept.
   - `manage/RosterPage.tsx` — `.../roster`: active/inactive tables
     (`GET /host/courses/{id}/roster`). Upload of the **Canvas gradebook CSV** only (no
     column-mapping wizard; that's admin-only), with mode "Add / update only" (default,
@@ -53,22 +58,26 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
   `GET /game/rooms/{code}` (failure ignored), opens the socket with `auth: {token}`, emits
   `join_room {room_code, role: "HOST"}` on **every** `connect`, maps server events to state and
   navigation, and exposes `useGame()` (phase, players, currentQuestion, answer counts, lock
-  state, results, gameOver, `autoAdvance`, `emitAdvance`, `emitLockQuestion`). Always renders a
-  corner QR code + room code. Any `error` event replaces the page with a message and
+  state, results, gameOver, `autoAdvance`, `emitAdvance`, `emitLockQuestion`). Preloads map
+  images on `game_images` (T7). Always renders a corner QR code + room code. Any `error` event replaces the page with a message and
   "Back to Home".
 - `game/LobbyPage.tsx` — big QR code (`{origin}/player/join?code=…`), room code, player count,
   the auto-advance toggle, and "Start Game" (`host_advance`; disabled at 0 players).
 - `game/QuestionPage.tsx` — question header (number, type, Accuracy/Participation, typo
-  tolerance), `TimerBar`, prompt (hidden while locked), `answered / players` count, a
+  tolerance), `TimerBar`, prompt (hidden while locked; for map_pin **only** the prompt, the
+  map is on the phones), `answered / players` count, a
   "Lock/Unlock Question" toggle (`host_lock_question`), and "Show Results" (`host_advance`,
   always enabled). With auto-advance on, it advances 1.5 s after `answer_phase_ended`.
 - `game/ResultsPage.tsx` — per-question distribution: word cloud for fill-in-the-blank
-  (client-side Levenshtein colours accepted answers), otherwise a bar chart (correct options
-  green; COMPLETENESS questions have no right/wrong). "Next Question" / "Show Final Results"
+  (client-side Levenshtein colours accepted answers), `MapPinHeatmap` for map_pin (both
+  grading types; COMPLETENESS adds a "Participation — full credit for answering" caption),
+  otherwise a bar chart (correct options green; COMPLETENESS questions have no right/wrong). "Next Question" / "Show Final Results"
   (`host_advance`). With auto-advance on, a 10 s countdown then advances.
 - `game/GameOverPage.tsx` — anonymous score histogram (~8 buckets up to `maxPossibleScore`),
   average/high/player count, "New Game" (→ `/home`), and a per-question breakdown card
-  (distribution, accepted answers, correct %, response rate, average answer time).
+  (distribution, accepted answers, correct %, response rate, average answer time; for map_pin,
+  "within target" % and average credit from the host summary, "—" when nobody answered, and
+  no image).
 
 ## How it fits in
 Uses `lib/api.ts` + `lib/utils.ts` (see `lib/CLAUDE.md`) and `components/ui/*` (see
@@ -111,6 +120,7 @@ Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **glob
 | `question_results` | → `/results` |
 | `game_over` | → `/gameover` (socket stays connected) |
 | `game_abandoned` | → `/home` |
+| `game_images` (T7) | `preloadImages(imageIds)` |
 | `error` / `connect_error` | full-screen error view |
 
 ## Gotchas
@@ -146,8 +156,14 @@ Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **glob
 - **Error messages.** Since T4, `api.ts` shows the server's `message` (e.g. "You do not have
   HOST access to this course", "This game is being played right now"). The OAuth2 exchange
   path in `LoginPage` bypasses `api.ts` and still reads only `detail`.
-- **The per-question UI is split across files.** `typeLabel` and `optionLabel` are duplicated
-  in `QuestionPage`, `ResultsPage`, and `GameOverPage`. The word cloud's Levenshtein grading is
+- **Refresh mid-game loses the preload.** `game_images` is sent once, at start, and the host's
+  `sync_state` has no `imageIds`, so after a reload the results heatmap loads its image on
+  demand ("Loading map…" briefly).
+- **The game-over histogram assumes whole-number scores.** Since `maxPossibleScore` is no
+  longer truncated, a fractional maximum (e.g. 8.75) gives slightly odd bucket labels
+  ("8–8.75"), though the bucketing still works.
+- **The per-question UI is split across files.** `typeLabel` lives in `QuestionPage` and
+  `GameOverPage`, `optionLabel` in all three game pages. The word cloud's Levenshtein grading is
   a client-side re-implementation used only for colouring, so it can disagree with the server's
   fuzzy match. A new question type needs changes in all three files plus `types/game.ts`.
 - `GameOverPage` percentages use `totalPlayers` as the bar denominator but `totalAnswered` for

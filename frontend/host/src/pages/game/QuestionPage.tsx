@@ -25,6 +25,7 @@ export default function QuestionPage() {
     true_false: 'True / False',
     fill_in_the_blank: 'Fill in the Blank',
     multi_select: 'Multi-Select',
+    map_pin: 'Map Pin',
   };
 
   function editDistanceLabel(d: number): string {
@@ -70,6 +71,7 @@ export default function QuestionPage() {
         />
       </div>
 
+      {/* map_pin: the projector shows only the prompt; the map is on the phones. */}
       {!questionLocked && (
         <h2 className="text-4xl font-bold text-slate-100 text-center max-w-3xl leading-tight">
           {currentQuestion.prompt}

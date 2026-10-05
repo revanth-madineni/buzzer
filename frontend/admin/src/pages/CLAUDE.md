@@ -61,7 +61,16 @@ Sessions, Guests), plus Logout. Unknown paths → `/users`.
   reorder (`POST .../reorder` with the full id order), inline add/edit via `QuestionForm`,
   delete, and JSON export. `formToPayload` builds `config` / `answer_data` per type and
   **derives `points_value`**: max option points (MC, FIB), max of T/F, sum of positive options
-  (multi-select), or the entered value for COMPLETENESS.
+  (multi-select), or the entered value for COMPLETENESS and for map pin.
+  - Map pin (T7, "Map pin (tap on image)"): upload to `POST /admin/images` (with the game's
+    `course_id` if it has one; the server's error message is shown), then click/drag on
+    `MapCanvas` to set the target; each radius has a number input (source of truth, 0.02–2,
+    step 0.005) paired with a 0.02–0.5 slider that shows `min(value, 0.5)`, so imported values
+    above 0.5 are kept. `mapPinFormError` blocks saving without an image or target, or with
+    radii outside the server's rules, for **both** grading types; a full radius below 0.04
+    warns. `config = {imageId}` (the server fills in dimensions); `answer_data = {targets:
+    [{x, y}], fullRadius, zeroRadius}`. List line: "Map pin — target (0.42, 0.37), r 0.04 →
+    0.15". "Replace image" uploads a new image and keeps the target fractions.
 - `SessionsPage.tsx` — `/sessions`: all sessions with status filter tabs (course, game, host,
   player count, dates). Per session: HTML report download, delete (two-step confirm), and an
   expandable export panel. Canvas CSV has a column title + optional assignment ID (appended to
@@ -124,8 +133,9 @@ Two separate role systems (see `backend/app/models/CLAUDE.md`):
   `USER`. The success message says "merged" either way.
 - **Question writes during a live game** (create, edit, delete, reorder, and game move) get
   409 `GAME_LIVE`. Deleting an answered question gets 409 `QUESTION_HAS_ANSWERS`. The page
-  shows the server's message. The backend still doesn't validate whole-question structure on
-  `PUT` (see `schemas/CLAUDE.md`).
+  shows the server's message. Since T7 the backend validates the whole merged question on
+  `PUT`, so editing a question that was already invalid fails with "Invalid input" until it's
+  made valid (see `schemas/CLAUDE.md`).
 - **`points_value` can disagree with the saved options.** Multi-select and fill-in-the-blank
   drop blank-text options/answers from the payload, but `points_value` is computed over **all**
   of them, blanks included. MC doesn't drop blank options at all.
@@ -134,7 +144,10 @@ Two separate role systems (see `backend/app/models/CLAUDE.md`):
   (camelCase). These must match `services/game_service.calculate_score` and the host app's
   reveal rendering. A new question type touches `FormState`, `defaultForm`,
   `questionToForm`, `formToPayload`, the `QuestionForm` UI, and the list rendering here, plus
-  the backend and both game frontends.
+  the backend and both game frontends. map_pin uses camelCase (`targets`, `fullRadius`,
+  `zeroRadius`, `imageId`).
+- **The map-pin editor canvas is untested.** No test runner; it was only type-checked and
+  built. Check target placement and the radius circles by hand after changing it.
 - **`max_players` is editable but never enforced** by the server (see `websocket/CLAUDE.md`).
 - **Literal escape sequences render on screen.** `Loading…` in JSX text (not inside
   `{'…'}`) shows the backslash sequence verbatim. This happens in `UsersPage`, `GuestsPage`,

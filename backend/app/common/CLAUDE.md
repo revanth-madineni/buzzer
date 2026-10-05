@@ -2,8 +2,8 @@
 
 ## Purpose
 Cross-cutting backend plumbing: FastAPI auth dependencies (who is the caller, are they an
-admin), the app's exception types and JSON error handlers, structlog setup, and the slowapi
-rate limiter.
+admin), the app's exception types and JSON error handlers, structlog setup, the slowapi
+rate limiter, and the request body size limit.
 
 ## Contents
 - `__init__.py` — Empty.
@@ -29,6 +29,15 @@ rate limiter.
   generic 500 `INTERNAL_ERROR`.
 - `logging.py` — `configure_logging()`: structlog with console renderer + DEBUG in development,
   JSON + INFO otherwise; quiets `uvicorn.access` in production unless stress-test mode is on.
+- `body_limit.py` (T7) — `BodySizeLimitMiddleware`, a pure ASGI middleware taking
+  `(method, path regex, max_bytes)` rules (first match wins; other requests untouched).
+  Registered in `main.py`, inside CORS so a 413 still gets CORS headers:
+  - `POST ^/api/admin/images$` and `POST ^/api/host/courses/\d+/images$`: 2.5 MB;
+  - `POST ^/api/admin/games/import$`: 26 MB.
+  A `Content-Length` over the limit gets 413 `{"error":"REQUEST_TOO_LARGE"}` without the body
+  being read. Otherwise it wraps `receive` and counts bytes, so a chunked or understated body
+  is cut off too: it raises out of `receive`, drops whatever error the app then sends (FastAPI
+  turns the aborted read into a 400), and sends the 413 instead.
 - `rate_limit.py` — the shared slowapi `limiter`. Keyed by client IP, except a random UUID per
   request (i.e. effectively **no limit**) in development, or when the request's `X-Stress-Key`
   header matches `settings.STRESS_TEST_KEY`.
@@ -81,3 +90,7 @@ Import edge: `dependencies.py` imports from `services/` (`auth_service`, and now
   outside load tests.
 - The catch-all 500 handler hides the exception from clients; check the `unhandled_error` log
   line for the real traceback.
+- **Body limits can't be a dependency.** Starlette spools the whole multipart body before
+  dependencies run, so size checks in a handler (like `prepare_image`'s 2 MB) are per-file
+  rules, not protection. New upload routes need a `BodySizeLimitMiddleware` rule, and the
+  proxy in front must allow the size too (`backend/CLAUDE.md`).

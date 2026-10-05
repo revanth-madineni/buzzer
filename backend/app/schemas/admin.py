@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Literal
 
@@ -132,12 +133,74 @@ class GameMoveRequest(BaseModel):
 # Questions
 # ---------------------------------------------------------------------------
 
+QUESTION_TYPE_PATTERN = (
+    "^(multiple_choice|true_false|fill_in_the_blank|multi_select|map_pin)$"
+)
+
+# map_pin limits (T7 spec §4.5). Radii are in image-width units.
+MAP_PIN_MIN_FULL_RADIUS = 0.02
+MAP_PIN_MAX_ZERO_RADIUS = 2
+MAP_PIN_MAX_IMAGE_ID = 64
+
+
+def is_valid_number(value: object) -> bool:
+    """JSON number, int or float but not bool, and finite (spec §4.0)."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _validate_map_pin(config: dict, answer_data: dict) -> None:
+    """Same rules for both grading types: both show the same reveal (spec §4.5)."""
+    extra = set(config) - {"imageId", "imageWidth", "imageHeight"}
+    if extra:
+        raise ValueError(f"map_pin config has unknown keys: {sorted(extra)}")
+    image_id = config.get("imageId")
+    if (
+        not isinstance(image_id, str)
+        or not image_id
+        or len(image_id) > MAP_PIN_MAX_IMAGE_ID
+    ):
+        raise ValueError(
+            "map_pin config.imageId must be a non-empty string of at most 64 characters"
+        )
+    for key in ("imageWidth", "imageHeight"):
+        if key in config:
+            v = config[key]
+            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                raise ValueError(f"map_pin config.{key} must be a positive integer")
+
+    extra = set(answer_data) - {"targets", "fullRadius", "zeroRadius"}
+    if extra:
+        raise ValueError(f"map_pin answer_data has unknown keys: {sorted(extra)}")
+    targets = answer_data.get("targets")
+    if not isinstance(targets, list) or len(targets) != 1:
+        raise ValueError(
+            "map_pin answer_data.targets must be a list of exactly 1 point"
+        )
+    target = targets[0]
+    if not isinstance(target, dict) or set(target) != {"x", "y"}:
+        raise ValueError("map_pin target must be an object with exactly keys x and y")
+    if not all(is_valid_number(target[k]) and 0 <= target[k] <= 1 for k in ("x", "y")):
+        raise ValueError("map_pin target x and y must be numbers between 0 and 1")
+    full = answer_data.get("fullRadius")
+    zero = answer_data.get("zeroRadius")
+    if not is_valid_number(full) or full < MAP_PIN_MIN_FULL_RADIUS:
+        raise ValueError(
+            f"map_pin fullRadius must be a number of at least {MAP_PIN_MIN_FULL_RADIUS}"
+        )
+    if not is_valid_number(zero) or not full < zero <= MAP_PIN_MAX_ZERO_RADIUS:
+        raise ValueError(
+            "map_pin zeroRadius must be a number greater than fullRadius and at most "
+            f"{MAP_PIN_MAX_ZERO_RADIUS}"
+        )
+
 
 class QuestionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: str = Field(
-        ..., pattern="^(multiple_choice|true_false|fill_in_the_blank|multi_select)$"
-    )
+    type: str = Field(..., pattern=QUESTION_TYPE_PATTERN)
     grading_type: str = Field(..., pattern="^(ACCURACY|COMPLETENESS)$")
     prompt: str = Field(..., min_length=1, max_length=2000)
     config: dict = Field(default_factory=dict)
@@ -202,14 +265,14 @@ class QuestionCreate(BaseModel):
                     )
                 if any(not isinstance(p, (int, float)) for p in pts):
                     raise ValueError("answer_points values must be numbers")
+        if self.type == "map_pin":
+            _validate_map_pin(self.config, self.answer_data)
         return self
 
 
 class QuestionUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: str | None = Field(
-        None, pattern="^(multiple_choice|true_false|fill_in_the_blank|multi_select)$"
-    )
+    type: str | None = Field(None, pattern=QUESTION_TYPE_PATTERN)
     grading_type: str | None = Field(None, pattern="^(ACCURACY|COMPLETENESS)$")
     prompt: str | None = Field(None, min_length=1, max_length=2000)
     config: dict | None = None
@@ -237,6 +300,21 @@ class QuestionResponse(BaseModel):
 class QuestionReorder(BaseModel):
     model_config = ConfigDict(extra="forbid")
     order: list[int] = Field(..., min_length=1)
+
+
+# ---------------------------------------------------------------------------
+# Images (T7). Never includes the bytes; those come from GET /api/images/{id}.
+# ---------------------------------------------------------------------------
+
+
+class ImageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    mime_type: str
+    width: int
+    height: int
+    byte_size: int
+    sha256: str
 
 
 # ---------------------------------------------------------------------------

@@ -29,8 +29,8 @@ Top-level files:
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
-| `lib/` | `api.ts` REST wrapper (`get`/`post`/`put`/`patch`/`delete`, `postForm`, `download`; Bearer token from `localStorage.token`; shows the server's error `message`) and `cn()`. No role logic. |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`) and the display-only `TimerBar` (supports a mid-question `initialSeconds`). |
+| `lib/` | `api.ts` REST wrapper (`get`/`post`/`put`/`patch`/`delete`, `postForm`, `download`; Bearer token from `localStorage.token`; shows the server's error `message`), `cn()`, and (T7) `mapPin.ts` + `images.ts`. No role logic. |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the display-only `TimerBar` (supports a mid-question `initialSeconds`), and (T7) `MapCanvas` + `MapPinHeatmap`. |
 | `pages/` | `LoginPage`, `HomePage` (course → that course's games, "Manage this course", active sessions), `game/*`, and `manage/*` (Games, QuestionEditor, Roster, Sessions). `game/GameLayout.tsx` owns the socket and shares state via `useGame()`. |
 
 ## How it fits together
@@ -94,8 +94,10 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
 - **Token collision with the player/admin apps.** All three use `localStorage.token` on one
   origin. A guest join in the player app on the same browser replaces the host's login, and
   logging out anywhere logs out everywhere (`lib/CLAUDE.md`).
-- **No token refresh.** The 2 h access token is never renewed, and `RequireAuth` still admits an
-  expired token.
+- **No token refresh, except for images.** The 2 h access token is renewed only when
+  `lib/images.ts` gets a 401 loading a map; `RequireAuth` still admits an expired token.
+- **Map pin is untested in a browser.** No test runner; the heatmap and editor canvas were only
+  type-checked and built. Check them by hand.
 - **Reconnect gaps.** In the RESULTS phase the chart is empty (results aren't in `sync_state`).
   A COMPLETED game strands the host on an empty lobby. `TimerBar` resume and reconnect math
   use the client clock and frozen client values, so the bar can drift from the server's timer

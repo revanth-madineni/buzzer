@@ -2,6 +2,47 @@ export interface SyncStatePayload {
   status: 'LOBBY' | 'IN_PROGRESS' | 'COMPLETED' | 'ABANDONED';
   playerCount: number;
   questionLocked?: boolean;
+  /** Map images to preload (LOBBY / IN_PROGRESS only). May go stale in LOBBY. */
+  imageIds?: string[];
+}
+
+/** Sent to the room at game start, before the first new_question. Final. */
+export interface GameImagesPayload {
+  imageIds: string[];
+}
+
+/**
+ * `code` marks the three late-answer rejections, which are non-fatal; any other
+ * error (no code) ends the game view.
+ */
+export interface ErrorPayload {
+  message: string;
+  code?: 'NO_ACTIVE_QUESTION' | 'QUESTION_LOCKED' | 'QUESTION_MISMATCH' | string;
+}
+
+export type QuestionType =
+  | 'multiple_choice'
+  | 'true_false'
+  | 'fill_in_the_blank'
+  | 'multi_select'
+  | 'map_pin';
+
+/** map_pin config: public by design (the target lives in answer_data, never sent). */
+export interface MapPinConfig {
+  imageId: string;
+  imageWidth: number;
+  imageHeight: number;
+}
+
+/** A map_pin answer: fractions of the image, x left→right, y top→bottom, in [0, 1]. */
+export interface MapPinAnswer {
+  x: number;
+  y: number;
+}
+
+export interface QuestionConfig extends Partial<MapPinConfig> {
+  options?: string[];
+  maxLength?: number;
 }
 
 export interface PlayerJoinedPayload {
@@ -12,9 +53,9 @@ export interface QuestionPayload {
   questionId: number;
   questionNumber: number;
   totalQuestions: number;
-  type: 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
+  type: QuestionType;
   prompt: string;
-  config: { options?: string[]; maxLength?: number };
+  config: QuestionConfig;
   timeLimitSeconds: number;
   pointsValue: number;
 }
@@ -27,12 +68,25 @@ export interface AnswerResultPayload {
   alreadyAnswered?: boolean;
 }
 
+/** Same reveal for both grading types (spec §4.6). Radii in image-width units. */
+export interface MapPinReveal {
+  type: 'map_pin';
+  gradingType: 'ACCURACY' | 'COMPLETENESS';
+  imageId: string;
+  imageWidth: number;
+  imageHeight: number;
+  target: MapPinAnswer;
+  fullRadius: number;
+  zeroRadius: number;
+}
+
 export type PlayerAnswerReveal =
   | { type: 'multiple_choice'; correctIndices: number[] }
   | { type: 'true_false'; correctValue: boolean }
   | { type: 'fill_in_the_blank'; acceptedAnswers: string[]; editDistance: number }
   | { type: 'completeness' }
-  | { type: 'multi_select'; answerPoints: number[] };
+  | { type: 'multi_select'; answerPoints: number[] }
+  | MapPinReveal;
 
 export interface PlayerResultsPayload {
   questionId: number;
@@ -46,13 +100,13 @@ export interface PlayerResultsPayload {
 export interface QuestionSummaryItem {
   questionId: number;
   prompt: string;
-  type: 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
+  type: QuestionType;
   gradingType: 'ACCURACY' | 'COMPLETENESS';
-  config: { options?: string[]; maxLength?: number };
+  config: QuestionConfig;
   pointsAwarded: number;
   maxPoints: number;
   answerTimeMs: number | null;
-  playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[] } | null;
+  playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[]; x?: number; y?: number } | null;
   answerReveal: PlayerAnswerReveal;
 }
 

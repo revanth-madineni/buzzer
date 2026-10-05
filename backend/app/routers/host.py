@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 import structlog
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import Response
 from redis.asyncio import Redis
 from sqlalchemy import delete, exists, func, select
@@ -25,14 +25,17 @@ from ..common.dependencies import (
     require_user,
 )
 from ..common.exceptions import BuzzerError
+from ..common.rate_limit import limiter
 from ..database import get_db
 from ..models.course import Course, CourseRoster
 from ..models.game import Game, Question
+from ..models.image import Image
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
 from ..redis_client import get_redis
 from ..schemas.admin import (
     GameResponse,
+    ImageResponse,
     QuestionCreate,
     QuestionReorder,
     QuestionResponse,
@@ -48,7 +51,7 @@ from ..schemas.host import (
     SessionListItem,
 )
 from ..services import access_service as access
-from ..services import game_service, question_service
+from ..services import game_service, image_service, question_service
 from ..services import state_service as state
 from ..services.export_service import build_session_csv
 from ..services.report_service import build_session_report
@@ -117,6 +120,7 @@ async def create_course_game(
     logger.info(
         "host_game_created", game_id=game.id, course_id=course.id, user_id=user.id
     )
+    await db.commit()
     return game
 
 
@@ -142,6 +146,7 @@ async def update_game(
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(game, field, value)
     await db.flush()
+    await db.commit()
     return game
 
 
@@ -204,6 +209,7 @@ async def delete_game(
         user_id=user.id,
         sessions_deleted=len(session_ids),
     )
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +236,9 @@ async def create_question(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> Question:
     await _guard_write(db, redis, game.id)
-    return await question_service.create_question(db, game, body)
+    question = await question_service.create_question(db, game, body)
+    await db.commit()
+    return question
 
 
 @router.post("/games/{game_id}/questions/reorder", status_code=204)
@@ -242,6 +250,7 @@ async def reorder_questions(
 ) -> None:
     await _guard_write(db, redis, game.id)
     await question_service.reorder_questions(db, game, body.order)
+    await db.commit()
 
 
 @router.put("/games/{game_id}/questions/{question_id}", response_model=QuestionResponse)
@@ -252,7 +261,9 @@ async def update_question(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> Question:
     await _guard_write(db, redis, question.game_id)
-    return await question_service.update_question(db, question, body)
+    updated = await question_service.update_question(db, question, body)
+    await db.commit()
+    return updated
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)
@@ -263,6 +274,7 @@ async def delete_question(
 ) -> None:
     await _guard_write(db, redis, question.game_id)
     await question_service.delete_question(db, question)
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +308,35 @@ async def upload_roster(
 ) -> RosterUploadResult:
     result = await process_roster_csv(db, course.id, await file.read(), mode)
     logger.info("host_roster_uploaded", course_id=course.id, user_id=user.id, mode=mode)
+    await db.commit()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Images (T7). Stored against the course in the URL. No live-game guard: an upload
+# writes no game or question.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/courses/{course_id}/images", response_model=ImageResponse, status_code=201
+)
+@limiter.limit("30/minute")
+async def upload_image(
+    request: Request,
+    file: Annotated[UploadFile, File(description="PNG, JPEG or WebP, at most 2 MB")],
+    course: Annotated[Course, Depends(require_course_host)],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Image:
+    image = await image_service.store_image(db, await file.read(), user, course.id)
+    # Commit before responding: get_db's commit runs after the response is sent, so a
+    # client that GETs the image right after the 201 could otherwise get a 404.
+    await db.commit()
+    logger.info(
+        "host_image_uploaded", image_id=image.id, course_id=course.id, user_id=user.id
+    )
+    return image
 
 
 # ---------------------------------------------------------------------------
