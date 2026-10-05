@@ -45,8 +45,8 @@
             "y": 0.6268786960136148
           }
         ],
-        "fullRadius": 0.03,
-        "zeroRadius": 0.07
+        "fullRadius": 0.04,
+        "zeroRadius": 0.06
       },
       "time_limit_seconds": 30,
       "points_value": 1.0
@@ -96,12 +96,12 @@
     {
       "type": "multiple_choice",
       "grading_type": "COMPLETENESS",
-      "prompt": "Which region would you most like to visit? West Coast / Midwest / South / Northeast",
+      "prompt": "Which region is Texas in?",
       "config": {
         "options": [
-          "West Coast",
-          "Midwest",
           "South",
+          "Midwest",
+          "West Coast",
           "Northeast"
         ]
       },
