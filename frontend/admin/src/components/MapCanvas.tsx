@@ -137,7 +137,7 @@ export function MapCanvas({
           touchAction: onPoint ? 'none' : 'auto',
           cursor: interactive ? 'crosshair' : 'default',
         }}
-        className="rounded-xl bg-slate-800"
+        className="rounded-xl bg-surface-alt"
         onPointerDown={(e) => {
           if (!interactive) return;
           const p = pointAt(e);
@@ -158,17 +158,17 @@ export function MapCanvas({
         }}
       />
       {status === 'loading' && (
-        <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm">
+        <div className="absolute inset-0 flex items-center justify-center text-fg-muted text-sm">
           Loading map…
         </div>
       )}
       {status === 'error' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm">
-          <p className="text-red-400">Couldn't load the map</p>
+          <p className="text-danger-fg">Couldn't load the map</p>
           <button
             type="button"
             onClick={() => setAttempt((n) => n + 1)}
-            className="rounded-lg border border-slate-500 px-4 py-2 text-slate-200 hover:bg-slate-700"
+            className="rounded-lg border border-line-strong px-4 py-2 text-fg hover:bg-surface-hover"
           >
             Retry
           </button>

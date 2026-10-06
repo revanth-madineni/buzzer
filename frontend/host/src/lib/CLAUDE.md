@@ -3,7 +3,8 @@
 ## Purpose
 Small shared helpers for the host (big-screen) app: a JSON fetch wrapper for the REST API
 (including multipart upload and file download for the management area), a Tailwind
-class-merge helper, and (T7) map-pin geometry and authenticated image loading. There is no socket code and no role or course-access
+class-merge helper, (T7) map-pin geometry and authenticated image loading, and (T9) the
+light/dark theme store. There is no socket code and no role or course-access
 logic here. The Socket.IO client is created in `pages/game/GameLayout.tsx`.
 
 ## Contents
@@ -18,8 +19,11 @@ logic here. The Socket.IO client is created in `pages/game/GameLayout.tsx`.
     array, else `HTTP <status>`.
 - `utils.ts` — `cn(...)` (clsx + tailwind-merge), used by `components/ui/*`.
 - `mapPin.ts` (T7) — map-pin geometry and drawing, **byte-identical to the player's and
-  admin's copies**; see `frontend/player/src/lib/CLAUDE.md` for the full description.
-  Untested (no test runner).
+  admin's copies**; see `frontend/player/src/lib/CLAUDE.md` for the full description,
+  including T9's cached `mapColor`. Untested (no test runner).
+- `theme.ts` (T9) — the light/dark theme store, **byte-identical in all three apps**; see
+  `frontend/player/src/lib/CLAUDE.md`. This app's key is `buzzer:theme:host`, read from
+  `<html data-theme-key>` in `index.html`.
 - `images.ts` (T7) — `loadImage` / `preloadImages`: images fetched with the Bearer token as
   blob URLs (an `<img src>` would 401), the promise cached per ID, failures evicted, and one
   shared `POST /api/auth/refresh` + retry on a 401. Byte-identical to the other apps' copies.
@@ -53,8 +57,9 @@ host-accessible session tools `GET /game/sessions/{id}/guests`, `POST .../merge-
 
 The auth token lives in `localStorage['token']`. It is written by `LoginPage` (password login
 and temp-token exchange), read here and by the socket `auth` callback in `GameLayout`, and
-cleared by `HomePage` on logout. `App.tsx`'s `RequireAuth` only checks that the key is
-**present**, not the user's role or the token's expiry.
+cleared by `HomePage` and the `HostLayout` sidebar on logout (`removeItem('token')` only, so
+the theme key `buzzer:theme:host` survives a logout). `App.tsx`'s `RequireAuth` only checks that
+the key is **present**, not the user's role or the token's expiry.
 
 ## Gotchas
 - **No client-side role check.** The host UI never looks at the user's role. A GUEST token
@@ -73,6 +78,8 @@ cleared by `HomePage` on logout. `App.tsx`'s `RequireAuth` only checks that the 
   `RequireAuth` still lets the user in because the stale token is present.
 - The JSON helpers set `Content-Type: application/json` on every request, including GETs and
   DELETEs.
+- **Never call `localStorage.clear()`** in any app: it would also wipe the theme keys, and the
+  three apps share one origin behind nginx.
 - This file is identical to the admin app's `lib/api.ts`, but it is a copy, not shared. The
   player's `lib/api.ts` is older and still reads only `detail`. A fix has to be made in each
   app.

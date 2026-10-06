@@ -23,6 +23,7 @@ import GamesPage from './pages/manage/GamesPage';
 import QuestionEditorPage from './pages/manage/QuestionEditorPage';
 import RosterPage from './pages/manage/RosterPage';
 import SessionsPage from './pages/manage/SessionsPage';
+import { ThemeToggle } from './components/ThemeToggle';
 
 interface Course { id: number; name: string; semester: string }
 
@@ -62,25 +63,25 @@ function HostLayout() {
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-      isActive ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700 hover:text-slate-100'
+      isActive ? 'bg-accent text-on-accent' : 'text-fg hover:bg-surface-hover'
     }`;
 
   return (
     <div className="flex min-h-screen">
-      <aside className="w-60 shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col">
-        <div className="px-4 py-5 border-b border-slate-700 space-y-2">
-          <h1 className="text-lg font-bold text-white px-2">Manage Course</h1>
+      <aside className="w-60 shrink-0 bg-surface border-r border-line flex flex-col">
+        <div className="px-4 py-5 border-b border-line space-y-2">
+          <h1 className="text-lg font-bold text-fg px-2">Manage Course</h1>
           <select
             value={courseId}
             onChange={(e) => switchCourse(e.target.value)}
-            className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-sm text-fg"
           >
             {!courses.some((c) => String(c.id) === courseId) && <option value={courseId}>Course {courseId}</option>}
             {courses.map((c) => (
               <option key={c.id} value={c.id}>{c.name} — {c.semester}</option>
             ))}
           </select>
-          {error && <p className="text-red-400 text-xs px-2">{error}</p>}
+          {error && <p className="text-danger-fg text-xs px-2">{error}</p>}
         </div>
         <nav className="flex-1 p-3 space-y-1">
           <NavLink to={`/courses/${courseId}/games`} className={linkClass}>
@@ -93,13 +94,14 @@ function HostLayout() {
             <History size={16} /> Sessions
           </NavLink>
         </nav>
-        <div className="p-3 border-t border-slate-700 space-y-1">
+        <div className="p-3 border-t border-line space-y-1">
           <NavLink to="/home" className={linkClass}>
             <Play size={16} /> Play
           </NavLink>
+          <ThemeToggle showLabel className="w-full justify-start gap-3 px-4" />
           <button
             onClick={logout}
-            className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 hover:text-slate-100 w-full transition-colors"
+            className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-fg hover:bg-surface-hover w-full transition-colors"
           >
             <LogOut size={16} /> Sign out
           </button>

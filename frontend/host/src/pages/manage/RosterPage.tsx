@@ -84,19 +84,19 @@ export default function RosterPage() {
 
   return (
     <div className="p-8 max-w-4xl space-y-6">
-      <h2 className="text-2xl font-bold text-slate-100">Roster</h2>
+      <h2 className="text-2xl font-bold text-fg">Roster</h2>
 
       <Card>
         <CardHeader>
-          <h3 className="font-semibold text-slate-100">Upload</h3>
-          <p className="text-slate-400 text-sm">Upload the gradebook CSV exported from Canvas.</p>
+          <h3 className="font-semibold text-fg">Upload</h3>
+          <p className="text-fg-muted text-sm">Upload the gradebook CSV exported from Canvas.</p>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <select
               value={mode}
               onChange={(e) => setMode(e.target.value as Mode)}
-              className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-sm text-fg"
             >
               <option value="add_update">Add / update only</option>
               <option value="replace">Replace roster (deactivate students not in the file)</option>
@@ -109,22 +109,22 @@ export default function RosterPage() {
           </div>
           {result && (
             <div className="text-sm">
-              <p className="text-slate-200">
+              <p className="text-fg">
                 {result.imported} added · {result.updated} updated · {result.deactivated} deactivated
               </p>
               {result.errors.length > 0 && (
-                <ul className="mt-2 list-disc pl-5 text-amber-400">
+                <ul className="mt-2 list-disc pl-5 text-warning-fg">
                   {result.errors.map((msg, i) => <li key={i}>{msg}</li>)}
                 </ul>
               )}
             </div>
           )}
-          {error && <p className="text-red-400 text-sm">{error}</p>}
+          {error && <p className="text-danger-fg text-sm">{error}</p>}
         </CardContent>
       </Card>
 
       {loading ? (
-        <p className="text-slate-400">Loading…</p>
+        <p className="text-fg-muted">Loading…</p>
       ) : (
         <>
           <RosterTable title={`Active (${active.length})`} entries={active} />
@@ -138,14 +138,14 @@ export default function RosterPage() {
 function RosterTable({ title, entries, muted }: { title: string; entries: RosterEntry[]; muted?: boolean }) {
   return (
     <Card>
-      <CardHeader><h3 className="font-semibold text-slate-100">{title}</h3></CardHeader>
+      <CardHeader><h3 className="font-semibold text-fg">{title}</h3></CardHeader>
       <CardContent>
         {entries.length === 0 ? (
-          <p className="text-slate-400 text-sm">No students.</p>
+          <p className="text-fg-muted text-sm">No students.</p>
         ) : (
-          <table className={`w-full text-sm ${muted ? 'text-slate-500' : 'text-slate-200'}`}>
+          <table className={`w-full text-sm ${muted ? 'text-fg-muted' : 'text-fg'}`}>
             <thead>
-              <tr className="text-left text-slate-400">
+              <tr className="text-left text-fg-muted">
                 <th className="py-1 pr-4 font-medium">Name</th>
                 <th className="py-1 pr-4 font-medium">NetID</th>
                 <th className="py-1 font-medium">Email</th>
@@ -153,7 +153,7 @@ function RosterTable({ title, entries, muted }: { title: string; entries: Roster
             </thead>
             <tbody>
               {entries.map((e) => (
-                <tr key={e.id} className="border-t border-slate-700">
+                <tr key={e.id} className="border-t border-line">
                   <td className="py-1.5 pr-4">{e.full_name}</td>
                   <td className="py-1.5 pr-4 font-mono">{e.netid}</td>
                   <td className="py-1.5">{e.email}</td>

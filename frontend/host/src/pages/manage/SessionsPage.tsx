@@ -49,27 +49,27 @@ export default function SessionsPage() {
 
   return (
     <div className="p-8 max-w-4xl">
-      <h2 className="text-2xl font-bold text-slate-100 mb-1">Completed Sessions</h2>
-      <p className="text-slate-400 text-sm mb-6">Every completed game played in this course, by any host.</p>
+      <h2 className="text-2xl font-bold text-fg mb-1">Completed Sessions</h2>
+      <p className="text-fg-muted text-sm mb-6">Every completed game played in this course, by any host.</p>
 
-      {error && <p className="text-red-400 mb-4 text-sm">{error}</p>}
+      {error && <p className="text-danger-fg mb-4 text-sm">{error}</p>}
 
       {loading ? (
-        <p className="text-slate-400">Loading…</p>
+        <p className="text-fg-muted">Loading…</p>
       ) : sessions.length === 0 ? (
-        <p className="text-slate-400">No completed sessions yet.</p>
+        <p className="text-fg-muted">No completed sessions yet.</p>
       ) : (
         <div className="space-y-3">
           {sessions.map((s) => (
             <Card key={s.session_id} className="flex items-center justify-between px-6 py-4">
               <div>
-                <p className="font-semibold text-slate-100">{s.game_title}</p>
-                <p className="text-slate-400 text-sm mt-0.5">
+                <p className="font-semibold text-fg">{s.game_title}</p>
+                <p className="text-fg-muted text-sm mt-0.5">
                   {new Date(s.completed_at ?? s.created_at).toLocaleString()} · {s.player_count} player
                   {s.player_count !== 1 ? 's' : ''}
                   {s.host_display_name ? ` · hosted by ${s.host_display_name}` : ''}
                 </p>
-                <p className="text-slate-500 text-xs mt-0.5">
+                <p className="text-fg-muted text-xs mt-0.5">
                   Room <span className="font-mono">{s.room_code}</span>
                 </p>
               </div>

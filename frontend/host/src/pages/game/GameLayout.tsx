@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { preloadImages } from '../../lib/images';
+import { ThemeToggle } from '../../components/ThemeToggle';
 import { QRCodeSVG } from 'qrcode.react';
 import { io, Socket } from 'socket.io-client';
 import type {
@@ -220,12 +221,15 @@ export default function GameLayout() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <div className="text-center space-y-4">
-          <p className="text-red-400 text-lg">{error}</p>
-          <button className="text-indigo-400 underline" onClick={() => navigate('/home')}>
-            Back to Home
-          </button>
+      <div data-stage className="contents">
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <ThemeToggle className="fixed top-4 right-4 z-40" />
+          <div className="text-center space-y-4">
+            <p className="text-danger-fg text-lg">{error}</p>
+            <button className="text-accent-fg underline" onClick={() => navigate('/home')}>
+              Back to Home
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -237,16 +241,22 @@ export default function GameLayout() {
     <GameContext.Provider
       value={{ phase, roomCode: code, gameTitle, players, playerCount, currentQuestion, answeredCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, questionResults, gameOver, autoAdvance, setAutoAdvance, emitAdvance, emitLockQuestion }}
     >
-      <Outlet />
+      {/* The stage (T9): projected game screens get 7:1 text tokens from theme.css.
+          display: contents adds no box, so layout is unchanged; tokens still inherit. */}
+      <div data-stage className="contents">
+        <Outlet />
 
-      {/* Persistent join panel — always visible in the bottom-right corner */}
-      <div className="fixed bottom-4 right-4 flex flex-col items-center gap-2 bg-slate-900/90 border border-slate-700 rounded-2xl p-3 shadow-xl backdrop-blur-sm">
-        <div className="bg-white rounded-lg p-1.5">
-          <QRCodeSVG value={playerJoinUrl} size={96} />
-        </div>
-        <div className="text-center">
-          <p className="text-slate-500 text-[10px] uppercase tracking-widest leading-none mb-0.5">Room Code</p>
-          <p className="text-white font-mono font-black tracking-widest text-lg leading-none">{code}</p>
+        <ThemeToggle className="fixed top-4 right-4 z-40" />
+
+        {/* Persistent join panel — always visible in the bottom-right corner */}
+        <div className="fixed bottom-4 right-4 flex flex-col items-center gap-2 bg-page/90 border border-line rounded-2xl p-3 shadow-xl backdrop-blur-sm">
+          <div className="bg-qr-tile rounded-lg p-1.5">
+            <QRCodeSVG value={playerJoinUrl} size={96} />
+          </div>
+          <div className="text-center">
+            <p className="text-fg-muted text-sm uppercase tracking-widest leading-none mb-1">Room Code</p>
+            <p className="text-fg font-mono font-black tracking-widest text-2xl leading-none">{code}</p>
+          </div>
         </div>
       </div>
     </GameContext.Provider>

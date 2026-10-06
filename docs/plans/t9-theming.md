@@ -18,7 +18,7 @@ All three apps hardcode one dark palette. Colour is written directly into JSX as
 classes: about 916 uses across 47 files, with about 70% of them slate. On top of that:
 
 - each `src/index.css` hardcodes `#0f172a` and `#f8fafc` on `body`;
-- the shared map-pin code draws with 17 `rgba()` literals.
+- the shared map-pin code draws with 17 `rgba()` literals and 9 `'white'` literals.
 
 There is no light theme, no toggle and no shared vocabulary for colour. Some text already fails
 WCAG AA in the current dark theme:
@@ -67,8 +67,8 @@ We need:
 6. **Some colours don't change with the theme**, because they sit on top of something the theme
    doesn't control:
    - the 8 player answer colours, each with its own text colour;
-   - the map-overlay colours (pin, target, radius circles, heatmap), which are drawn on the map
-     image;
+   - the map-overlay colours (pin, target, radius circles, heatmap, white outlines), which are
+     drawn on the map image;
    - the white QR-code tile;
    - a `scrim` (black) with `on-scrim` (white) text, for anything drawn over an image or as an
      overlay.
@@ -287,6 +287,7 @@ The host doesn't use `answer-N`. If it ever does, add stage overrides first.
 | `map-pin` | player's pin | `#dc2626` | — |
 | `map-pin-disabled` | pin while input is disabled | `#64748b` | — |
 | `map-heat` | heatmap dots (alpha 0.55) | `#ef4444` | — |
+| `map-outline` | outline of the target dot and the pin, and the pin's inner dot (alpha 1) | `#ffffff` | — |
 | `qr-tile` | white tile behind every QR code | `#ffffff` | — |
 | `scrim` | overlay behind anything drawn over an image, and modal backdrops; always used with alpha | `#000000` | `on-scrim` `#ffffff` |
 
@@ -349,8 +350,11 @@ Import it from `src/main.tsx`, immediately **before** `./index.css`.
 - Set `theme.extend.borderColor.DEFAULT` to the `line` mapping. Once the palette is replaced,
   Tailwind's default border colour (`gray.200`) no longer exists, and every bare `border` and
   the preflight default would fall back to `currentColor`.
-- Set `theme.extend.ringColor.DEFAULT` to the `focus` mapping. Without it, a bare `ring` falls
-  back to hardcoded blue.
+- Set `theme.extend.ringColor.DEFAULT` to the `focus` colour. Without it, a bare `ring` falls
+  back to hardcoded blue. Use Tailwind's function form (`({ opacityValue }) =>
+  rgb(var(--focus) / <opacityValue>)`, cast to `string` for the types), not the
+  `<alpha-value>` string: Tailwind builds the default ring colour with `withAlphaValue()`, which
+  can't parse that string and silently keeps the blue.
 - Keep the existing `fontFamily` and `content` globs. Don't add custom `fontSize` names: `cn()`
   uses tailwind-merge, which would mistake a custom size such as `text-display` for a colour
   and drop one of the two classes. Stock sizes (`text-xl` … `text-7xl`) are enough.
@@ -362,8 +366,10 @@ Keep the three `@tailwind` directives and `box-sizing`. Remove the hardcoded `bo
 **In `@layer base`:**
 
 - **`body`:** background `rgb(var(--page))`, colour `rgb(var(--fg))`.
-- **`::placeholder`:** colour `rgb(var(--fg-muted))`, `opacity: 1`. Firefox otherwise dims
-  placeholders below 4.5:1.
+- **`input::placeholder, textarea::placeholder`:** colour `rgb(var(--fg-muted))`,
+  `opacity: 1`. Firefox otherwise dims placeholders below 4.5:1. Use this selector, not a bare
+  `::placeholder`: Tailwind's preflight sets `input::placeholder, textarea::placeholder` to
+  `#9ca3af`, and its higher specificity would win (2.5:1 on a light surface).
 - **`:root`:** `accent-color: rgb(var(--accent))`. This replaces the six
   `accent-indigo-500` classes on native checkboxes and range sliders.
 - **`:focus-visible`:** `outline: 2px solid rgb(var(--focus)); outline-offset: 2px`.
@@ -472,7 +478,7 @@ A tiny external store with no React context.
 
 | app | rendered by | position |
 |---|---|---|
-| host | `HostLayout` (in `App.tsx`): covers games, questions, roster and sessions | in its header next to Sign out, `showLabel` |
+| host | `HostLayout` (in `App.tsx`): covers games, questions, roster and sessions | sidebar, directly above Sign out (in the bottom section with Play), `showLabel`. `HostLayout` has no header. |
 | host | `LoginPage`, `HomePage` | `fixed top-4 right-4 z-40` |
 | host | `game/GameLayout` (inside the stage wrapper, in both its normal and error returns): covers lobby, question, results and game over | `fixed top-4 right-4 z-40`. The corner QR panel is bottom-right. Every stage page centres its content at `max-w-4xl` (896px, the heatmap) or narrower, so the top-right 64×64 px is empty at both 1280×720 and 1920×1080. Confirm this on the screenshots. |
 | player | `JoinPage`, `NamePage`, `game/LobbyPage`, `game/FeedbackPage`, `game/ResultsPage`, `game/GameOverPage` | `fixed top-3 right-3 z-40`. Each of these pages adds `pt-16` to its root element so content can never slide under the button, including when it overflows at 360×640. |
@@ -534,7 +540,7 @@ Work file by file and apply this table.
 | `text-white` on an indigo, red or green fill | text on a fill | `text-on-accent` / `text-on-danger` / `text-on-success` |
 | `bg-indigo-600`, `bg-indigo-500`, `hover:bg-indigo-500` | primary action | `bg-accent hover:bg-accent-hover` |
 | `text-indigo-300`, `-400`, `-700` | link, accent text | `text-accent-fg` |
-| `bg-indigo-900`, `border-indigo-400`/`-500` on a selected admin control (for example the HOST/PLAYER two-button toggle) | selected state on a desktop control | `bg-accent-soft text-accent-fg border-accent` |
+| `bg-indigo-600 text-white` on the selected segment of an admin choice control: the HOST/PLAYER two-button toggle (`UserDetailPage`), and the export-format buttons (`SessionsPage`, also `border-indigo-500`) | selected state on a desktop control | `bg-accent text-on-accent` (plus `border-accent` where the control has its own border), and a **✓ before the selected label**, so selection isn't shown by colour alone. Unselected: `text-fg-muted enabled:hover:text-fg`, or `border-line-strong text-fg enabled:hover:bg-surface-hover` for bordered buttons. (`accent-soft` is not used for selection: it is 1.1–1.2:1 against the surfaces.) |
 | `accent-indigo-500` | native checkbox or slider | remove; the base `accent-color` covers it |
 | any `focus:*` colour or offset class, `outline-none` | focus | remove (§4.10) |
 | `text-green-300`, `-400`, `-500` | success or correct text | `text-success-fg` |
@@ -572,6 +578,10 @@ Work file by file and apply this table.
   - Don't build a separate "disabled" colour.
   - Don't show "disabled" by colour alone on a control that is actually enabled.
   - The map pin uses `map-pin-disabled`.
+  - The `Button` variants' hover classes are `enabled:hover:…`, so a disabled button doesn't
+    react to hover. A `className` that overrides a `Button`'s hover must also use
+    `enabled:hover:`: the `:enabled` pseudo-class gives the variant rule higher specificity than
+    a plain `hover:` override, which would otherwise lose.
 - **Anything not covered here** (one-offs such as `text-slate-900` or `bg-slate-600` in a chip):
   choose the token by role. If no token fits, **add a token** to §4.3, `theme.css` (all three
   apps) and the config, **and add its pairs to the contrast list in `check_theme.py` and
@@ -584,6 +594,10 @@ Work file by file and apply this table.
   - Unassigned → neutral;
   - Guests allowed → success;
   - live session → accent.
+
+  Session status chips (admin `SessionsPage`): `LOBBY` and `IN_PROGRESS` → accent (both are
+  live sessions), `COMPLETED` → neutral, `ABANDONED` → danger. The common case stays quiet,
+  so live and abandoned sessions stand out.
 
 ### 4.12 Per-app notes
 
@@ -651,13 +665,14 @@ Work file by file and apply this table.
 - **Native controls.** Raw `<select>`, `<textarea>` and checkboxes get `bg-surface-alt
   border-line-strong text-fg`. `color-scheme` (§4.4) makes their drop-down lists follow the
   theme.
-- **The sidebar** is `bg-surface border-r border-line`. The active link is `bg-accent-soft
-  text-accent-fg`.
+- **The sidebar** (here and in the host's `HostLayout`) is `bg-surface border-r border-line`.
+  The active link is `bg-accent text-on-accent`, as it is today; `accent-soft` would be 1.1:1
+  against the sidebar in dark.
 
 ### 4.13 Canvas and map code
 
 - **`lib/mapPin.ts`** (byte-identical ×3) gets one helper,
-  `mapColor(name: 'full' | 'full-fill' | 'zero' | 'pin' | 'pin-disabled' | 'heat', alpha = 1)`:
+  `mapColor(name: 'full' | 'full-fill' | 'zero' | 'pin' | 'pin-disabled' | 'heat' | 'outline', alpha = 1)`:
   - It reads `getComputedStyle(document.documentElement).getPropertyValue('--map-' + name)`,
     trims it, and **caches it per name** in a module-level map. The `--map-*` tokens are
     invariant, so the cache never goes stale. The heatmap calls the helper once per dot, so
@@ -669,8 +684,10 @@ Work file by file and apply this table.
 
   Replace each literal with a call: the zero circle is `mapColor('zero', 0.95)`, the full-credit
   fill is `('full-fill', 0.25)`, the full-credit stroke and target dot are `('full')`. The
-  default colour of `drawPin` becomes `mapColor('pin')`, resolved inside the function and not
-  as a default-parameter literal.
+  three `'white'` literals (the target dot's outline in `drawTarget`, and the pin's outline and
+  inner dot in `drawPin`) become `mapColor('outline')`. The default colour of `drawPin`
+  becomes `mapColor('pin')`, resolved inside the function and not as a default-parameter
+  literal.
 - **`player/src/components/MapPinCanvas.tsx`:** the disabled pin uses
   `mapColor('pin-disabled')`.
 - **`host/src/components/MapPinHeatmap.tsx`:** dots use `mapColor('heat', 0.55)`.
@@ -697,6 +714,7 @@ also carry text, a glyph or position.
 | player `GameOverPage` recap | audit during the sweep | if correctness is shown by colour only, add ✓ / ✗ |
 | player multi-select | selected options show ✓ in place of the letter | none (§4.11) |
 | host lobby auto-advance switch | knob position | none |
+| admin HOST/PLAYER toggle, export-format buttons | accent fill on the selected segment | add "✓ " before the selected label (§4.11) |
 | `TimerBar` (both) | bar width plus "Ns" label | none. The "Ns" label is the main signal and uses `text-fg-muted` (the stage value on the host). The bands are also checked at 3:1 against the track (§4.15), so the bar is readable without the label. |
 
 ### 4.15 `scripts/check_theme.py` (new) — a manual gate
@@ -836,10 +854,21 @@ True/False. One room therefore produces every screen.
 | app | screens (`<screen>` names) |
 |---|---|
 | host | `login`, `home`, `manage-question-editor` (map-pin question open, with the image and target placed), `lobby`, `question`, `results-bars` (ACCURACY multiple choice), `results-wordcloud`, `results-heatmap`, `gameover` |
-| player | `join`, `question-mc`, `question-multi` (one option selected), `question-map`, `results-map`, `gameover` |
+| player | `join` (`NamePage`, "Join Room …", which is what the before image shows), `question-mc`, `question-multi` (one option selected), `question-map`, `results-map`, `gameover` |
 | admin | `users`, `access`, `question-editor-map`, `sessions-export` (export panel open) |
 
-That is 19 screens, so 19 "before" images and 38 "after" images.
+That is 19 screens, so 38 "after" images. There are 17 "before" images: `host-results-wordcloud`
+and `player-question-multi` were added to this list after the "before" set was taken, and they
+have **no before image**. They need only the two "after" images, and their `docs/ui/README.md`
+rows show "—" in the before column. The same applies to `player-gameover`: the committed
+`before/player-gameover.png` shows the **host** game-over screen (histogram, "New Game", QR
+panel), so that row also shows "—" and says why, and the mislabelled file is removed.
+
+**Before-image size.** The committed "before" images were captured from a laptop browser window
+(about 1400×680 CSS px at 2×), not at the viewports above; the player ones are desktop-width.
+The "after" images are still taken at the viewports above, and `docs/ui/README.md` says in one
+line that the before set is at a different size, so the pairs compare colour and design, not
+layout at the target size.
 
 ### 4.17 T8 and later code
 
@@ -1075,3 +1104,48 @@ Per `.claude/rules/context-sync.md`, update:
   - **Cross-references:** the pinch-zoom reference now points to §4.7, and step 7 no longer
     repeats step 3.
   - **Values:** all new pairs were computed from the stated values and pass.
+- 2026-10-05 — Implementation: the "before" set (step 0) was taken before the goldfish revision
+  added `host-results-wordcloud` and `player-question-multi`. Those two screens get "after"
+  images only (§4.16); 17 "before" images, 38 "after".
+- 2026-10-05 — Implementation review before step 3. **User decisions:**
+  - **`map-outline` token added.** `mapPin.ts` draws the target dot's outline, the pin's
+    outline and the pin's inner dot in `'white'` (9 literals across the three copies), which no
+    token covered and which §4.15's named-colour check rejects. The new invariant token is
+    `map-outline` (`#ffffff`), and `mapColor` gains `'outline'` (§4.3, §4.13). Like the other
+    map tokens it is drawn on the image, so it has no contrast pairs. The escape hatch was
+    rejected: it would have meant 9 ignored lines.
+  - **Host toggle placement.** `HostLayout` has no header; Sign out is at the bottom of its
+    sidebar. The toggle goes in the sidebar directly above Sign out (§4.9), as in the admin
+    app. A fixed top-right toggle was rejected because management pages scroll inside an
+    `overflow-auto` `<main>` with their own top-right actions.
+  - **Session status chips.** `LOBBY` and `IN_PROGRESS` → accent, `COMPLETED` → neutral,
+    `ABANDONED` → danger (§4.11 badge convention).
+- 2026-10-05 — Implementation review after step 3:
+  - **`ringColor.DEFAULT` uses Tailwind's function form** (§4.5). Written as the
+    `<alpha-value>` string, the setting was silently ignored and the default ring stayed blue,
+    because Tailwind's ring default goes through `withAlphaValue()`. The function form gives
+    `rgb(var(--focus) / 0.5)`; it needs a cast because Tailwind's types omit it.
+  - **Screenshots (user decision).** The "before" set turned out to be laptop-window captures,
+    not taken at §4.16's viewports, and `player-join` shows `NamePage`. The "after" images stay at
+    the spec viewports, `docs/ui/README.md` notes the size mismatch, and the `player-join`
+    "after" image shows `NamePage` to match (§4.16).
+- 2026-10-05 — Implementation review after step 4 (user decision): the `Button` variants'
+  hover classes become `enabled:hover:…`. Replacing `disabled:pointer-events-none` with the
+  standard `disabled:cursor-not-allowed` had made disabled buttons react to hover. Hover
+  overrides passed to a `Button` must use `enabled:hover:` too (§4.11, disabled state).
+- 2026-10-05 — Implementation review during step 5 (user decision): the §4.11 row for
+  selected admin controls described the HOST/PLAYER toggle as `bg-indigo-900` (it is
+  `bg-indigo-600 text-white`) and mapped it to `accent-soft`, which is 1.1–1.2:1 against the
+  surfaces in both themes, so the selected segment would barely show. Selected segments are now
+  `bg-accent text-on-accent` with a ✓ before the label (§4.11, §4.14); the accent fill alone is
+  2.3–2.8:1 against dark surfaces, so the ✓ carries the state. Both sidebars' active link also
+  uses the accent fill (§4.12).
+- 2026-10-05 — Implementation, step 6: the §4.6 placeholder rule's selector becomes
+  `input::placeholder, textarea::placeholder`. As a bare `::placeholder` it lost to Tailwind
+  preflight's rule of the same name, which has higher specificity, so every placeholder stayed
+  `#9ca3af` (2.5:1 on a light surface).
+- 2026-10-05 — Implementation, step 8: `before/player-gameover.png` turned out to be a host
+  game-over capture, so `player-gameover` is treated as having no before image (§4.16); 16
+  usable before images, 38 after.
+- 2026-10-05 — User decision: the mislabelled `before/player-gameover.png` is removed rather
+  than kept with an explanation.

@@ -18,7 +18,7 @@ interface Game {
 }
 
 const selectClass =
-  'w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  'w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg';
 
 export default function GamesPage() {
   const [games, setGames] = useState<Game[]>([]);
@@ -146,13 +146,13 @@ export default function GamesPage() {
   return (
     <div className="p-8 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-slate-100">Games</h2>
+        <h2 className="text-2xl font-bold text-fg">Games</h2>
         <div className="flex gap-2">
           <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
           <select
             value={importCourseId}
             onChange={(e) => setImportCourseId(e.target.value ? Number(e.target.value) : '')}
-            className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-100"
+            className="rounded-lg border border-line-strong bg-surface px-2 py-1 text-sm text-fg"
             title="Course to import the game into"
           >
             <option value="">Import into course…</option>
@@ -175,11 +175,11 @@ export default function GamesPage() {
         </div>
       </div>
 
-      {error && <p className="text-red-400 mb-4 text-sm">{error}</p>}
+      {error && <p className="text-danger-fg mb-4 text-sm">{error}</p>}
 
       {showForm && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Create Game</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-fg">Create Game</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleCreate} className="space-y-3">
               <select
@@ -198,11 +198,11 @@ export default function GamesPage() {
                 placeholder="Description (optional)"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                className="w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg resize-none"
                 rows={3}
               />
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Max players</label>
+                <label className="block text-xs text-fg-muted mb-1">Max players</label>
                 <Input
                   type="number"
                   value={maxPlayers}
@@ -222,7 +222,7 @@ export default function GamesPage() {
 
       {editingGame && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Edit Game</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-fg">Edit Game</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleEdit} className="space-y-3">
               <Input placeholder="Title" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} required />
@@ -230,11 +230,11 @@ export default function GamesPage() {
                 placeholder="Description (optional)"
                 value={editDescription}
                 onChange={(e) => setEditDescription(e.target.value)}
-                className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                className="w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg resize-none"
                 rows={3}
               />
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Max players</label>
+                <label className="block text-xs text-fg-muted mb-1">Max players</label>
                 <Input
                   type="number"
                   value={editMaxPlayers}
@@ -253,33 +253,33 @@ export default function GamesPage() {
       )}
 
       {loading ? (
-        <p className="text-slate-400">Loading\u2026</p>
+        <p className="text-fg-muted">Loading\u2026</p>
       ) : games.length === 0 ? (
-        <p className="text-slate-400">No games yet.</p>
+        <p className="text-fg-muted">No games yet.</p>
       ) : (
         <div className="space-y-3">
           {games.map((g) => (
             <Card key={g.id} className="px-6 py-4 space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-semibold text-slate-100 flex items-center gap-2">
+                <p className="font-semibold text-fg flex items-center gap-2">
                   {g.title}
                   {g.restricted && (
-                    <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-400">
+                    <span className="inline-flex items-center gap-1 rounded bg-warning-soft px-1.5 py-0.5 text-xs font-semibold text-warning-fg">
                       <Lock size={11} /> Restricted
                     </span>
                   )}
                   {g.course_id === null && (
-                    <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-xs font-medium text-red-400">
+                    <span className="rounded bg-surface-alt px-1.5 py-0.5 text-xs font-semibold text-fg-muted">
                       Unassigned
                     </span>
                   )}
                 </p>
                 {g.course_id !== null && (
-                  <p className="text-slate-400 text-sm">{courseLabel(g.course_id)}</p>
+                  <p className="text-fg-muted text-sm">{courseLabel(g.course_id)}</p>
                 )}
-                {g.description && <p className="text-slate-400 text-sm mt-0.5 line-clamp-1">{g.description}</p>}
-                <p className="text-slate-500 text-xs mt-0.5">Max {g.max_players} players</p>
+                {g.description && <p className="text-fg-muted text-sm mt-0.5 line-clamp-1">{g.description}</p>}
+                <p className="text-fg-muted text-xs mt-0.5">Max {g.max_players} players</p>
               </div>
               <div className="flex gap-2">
                 <Button

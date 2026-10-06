@@ -45,7 +45,7 @@ function personLabel(u: Person): string {
 }
 
 const selectClass =
-  'rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  'rounded-lg border border-line-strong px-3 py-2 text-sm text-fg';
 
 function UserPicker({
   users,
@@ -59,7 +59,7 @@ function UserPicker({
   onChange: (id: string) => void;
 }) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} className={`${selectClass} flex-1`}>
+    <select value={value} onChange={(e) => onChange(e.target.value)} className={`${selectClass} bg-surface-alt flex-1`}>
       <option value="">Select a user…</option>
       {users
         .filter((u) => !exclude.has(u.id))
@@ -85,22 +85,22 @@ export default function AccessPage() {
   return (
     <div className="p-8 max-w-4xl space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-slate-100">Access</h2>
-        <p className="text-slate-400 text-sm mt-1">
+        <h2 className="text-2xl font-bold text-fg">Access</h2>
+        <p className="text-fg-muted text-sm mt-1">
           Who can host and play in a course, and which hosts can use its restricted games.
         </p>
       </div>
       <select
         value={courseId}
         onChange={(e) => setCourseId(e.target.value ? Number(e.target.value) : '')}
-        className={`${selectClass} w-full`}
+        className={`${selectClass} bg-surface w-full`}
       >
         <option value="">Select a course…</option>
         {courses.map((c) => (
           <option key={c.id} value={c.id}>{c.name} — {c.semester}</option>
         ))}
       </select>
-      {error && <p className="text-red-400 text-sm">{error}</p>}
+      {error && <p className="text-danger-fg text-sm">{error}</p>}
       {courseId !== '' && <CourseAccess key={courseId} courseId={courseId} courses={courses} users={users} />}
     </div>
   );
@@ -148,20 +148,20 @@ function CourseAccess({ courseId, courses, users }: { courseId: number; courses:
 
   return (
     <>
-      {error && <p className="text-red-400 text-sm">{error}</p>}
+      {error && <p className="text-danger-fg text-sm">{error}</p>}
 
       <Card>
-        <CardHeader><h3 className="font-semibold text-slate-100">Course hosts and players</h3></CardHeader>
+        <CardHeader><h3 className="font-semibold text-fg">Course hosts and players</h3></CardHeader>
         <CardContent className="space-y-3">
-          {members.length === 0 && <p className="text-slate-500 text-sm">Nobody has access to this course yet.</p>}
+          {members.length === 0 && <p className="text-fg-muted text-sm">Nobody has access to this course yet.</p>}
           {members.map((m) => (
             <div key={m.user_id} className="flex items-center justify-between gap-3">
-              <span className="text-slate-200 text-sm">{personLabel(m)}</span>
+              <span className="text-fg text-sm">{personLabel(m)}</span>
               <div className="flex items-center gap-2">
                 <select
                   value={m.role}
                   onChange={(e) => void setRole(m.user_id, e.target.value as 'HOST' | 'PLAYER')}
-                  className={selectClass}
+                  className={`${selectClass} bg-surface-alt`}
                 >
                   <option value="HOST">HOST</option>
                   <option value="PLAYER">PLAYER</option>
@@ -178,14 +178,14 @@ function CourseAccess({ courseId, courses, users }: { courseId: number; courses:
               </div>
             </div>
           ))}
-          <div className="flex gap-2 pt-2 border-t border-slate-700">
+          <div className="flex gap-2 pt-2 border-t border-line">
             <UserPicker
               users={users}
               exclude={new Set(members.map((m) => m.user_id))}
               value={newUser}
               onChange={setNewUser}
             />
-            <select value={newRole} onChange={(e) => setNewRole(e.target.value as 'HOST' | 'PLAYER')} className={selectClass}>
+            <select value={newRole} onChange={(e) => setNewRole(e.target.value as 'HOST' | 'PLAYER')} className={`${selectClass} bg-surface-alt`}>
               <option value="HOST">HOST</option>
               <option value="PLAYER">PLAYER</option>
             </select>
@@ -202,13 +202,13 @@ function CourseAccess({ courseId, courses, users }: { courseId: number; courses:
 
       <Card>
         <CardHeader>
-          <h3 className="font-semibold text-slate-100">Games in this course</h3>
-          <p className="text-slate-400 text-sm">
+          <h3 className="font-semibold text-fg">Games in this course</h3>
+          <p className="text-fg-muted text-sm">
             Every HOST of the course can use an unrestricted game. A restricted game also needs a grant.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          {courseGames.length === 0 && <p className="text-slate-500 text-sm">No games in this course.</p>}
+          {courseGames.length === 0 && <p className="text-fg-muted text-sm">No games in this course.</p>}
           {courseGames.map((g) => (
             <GameAccess key={g.id} game={g} users={users} onChanged={load} />
           ))}
@@ -218,14 +218,14 @@ function CourseAccess({ courseId, courses, users }: { courseId: number; courses:
       {unassigned.length > 0 && (
         <Card>
           <CardHeader>
-            <h3 className="font-semibold text-slate-100">Unassigned games</h3>
-            <p className="text-slate-400 text-sm">Only admins can run these until they belong to a course.</p>
+            <h3 className="font-semibold text-fg">Unassigned games</h3>
+            <p className="text-fg-muted text-sm">Only admins can run these until they belong to a course.</p>
           </CardHeader>
           <CardContent className="space-y-3">
             {unassigned.map((g) => (
               <div key={g.id} className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-200 text-sm">{g.title}</span>
+                  <span className="text-fg text-sm">{g.title}</span>
                   {assigning !== g.id && (
                     <Button size="sm" variant="outline" onClick={() => setAssigning(g.id)}>
                       Assign to this course
@@ -277,13 +277,13 @@ function GameAccess({ game, users, onChanged }: { game: Game; users: User[]; onC
   }
 
   return (
-    <div className="rounded-lg border border-slate-700 p-3 space-y-2">
+    <div className="rounded-lg border border-line p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-slate-100 flex items-center gap-2">
+        <span className="font-medium text-fg flex items-center gap-2">
           {game.title}
-          {game.restricted && <Lock size={12} className="text-amber-400" />}
+          {game.restricted && <Lock size={12} className="text-warning-fg" />}
         </span>
-        <label className="flex items-center gap-2 text-sm text-slate-300">
+        <label className="flex items-center gap-2 text-sm text-fg">
           <input
             type="checkbox"
             checked={game.restricted}
@@ -296,16 +296,16 @@ function GameAccess({ game, users, onChanged }: { game: Game; users: User[]; onC
       </div>
 
       {game.restricted && holders.length === 0 && (
-        <p className="flex items-center gap-1 text-amber-400 text-xs">
+        <p className="flex items-center gap-1 text-warning-fg text-xs">
           <AlertTriangle size={12} /> Only admins can run this game — grant a host or un-restrict it.
         </p>
       )}
       {holders.map((h) => (
         <div key={h.user_id} className="flex items-center justify-between text-sm">
-          <span className="text-slate-300">
+          <span className="text-fg">
             {personLabel(h)}
             {!h.has_course_host && (
-              <span className="ml-2 text-amber-400 text-xs">
+              <span className="ml-2 text-warning-fg text-xs">
                 <AlertTriangle size={11} className="inline mr-0.5" />
                 not a HOST of this course — this grant has no effect
               </span>
@@ -334,7 +334,7 @@ function GameAccess({ game, users, onChanged }: { game: Game; users: User[]; onC
           Grant game
         </Button>
       </div>
-      {error && <p className="text-red-400 text-xs">{error}</p>}
+      {error && <p className="text-danger-fg text-xs">{error}</p>}
     </div>
   );
 }

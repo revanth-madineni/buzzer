@@ -63,15 +63,15 @@ export function MoveGamePanel({
   const choices = courses.filter((c) => c.id !== game.course_id);
 
   return (
-    <div className="rounded-lg border border-slate-600 bg-slate-800/50 p-3 space-y-3 text-sm">
-      <p className="text-slate-200">
+    <div className="rounded-lg border border-line bg-surface-alt p-3 space-y-3 text-sm">
+      <p className="text-fg">
         {verb} <span className="font-semibold">{game.title}</span> to a course
       </p>
       {fixedCourseId === undefined && (
         <select
           value={target}
           onChange={(e) => { setTarget(e.target.value ? Number(e.target.value) : ''); setPreview(null); }}
-          className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg"
         >
           <option value="">Select a course…</option>
           {choices.map((c) => (
@@ -81,14 +81,14 @@ export function MoveGamePanel({
       )}
       {preview !== null && (
         preview.length === 0 ? (
-          <p className="text-slate-300">No grants will be dropped.</p>
+          <p className="text-fg">No grants will be dropped.</p>
         ) : (
-          <p className="text-amber-400">
+          <p className="text-warning-fg">
             These users will lose access: {preview.map(userLabel).join(', ')}
           </p>
         )
       )}
-      {error && <p className="text-red-400">{error}</p>}
+      {error && <p className="text-danger-fg">{error}</p>}
       <div className="flex gap-2">
         {preview === null ? (
           <Button size="sm" disabled={busy || target === ''} onClick={() => void call(false)}>

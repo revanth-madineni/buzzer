@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { MapCanvas } from './MapCanvas';
-import { drawTarget, fractionToCanvas, type DrawRect } from '../lib/mapPin';
+import { drawTarget, fractionToCanvas, mapColor, type DrawRect } from '../lib/mapPin';
 import type { MapPinReveal } from '../types/game';
 
 /** The server buckets taps on this grid (game_service.map_pin_bucket). */
@@ -27,6 +27,7 @@ export function MapPinHeatmap({
         })
         .filter((c) => Number.isInteger(c.bx) && Number.isInteger(c.by) && c.count > 0);
       const maxCount = Math.max(1, ...cells.map((c) => c.count));
+      const dotColor = mapColor('heat', 0.55);
       ctx.save();
       for (const { bx, by, count } of cells) {
         const centre = fractionToCanvas({ x: (bx + 0.5) / GRID, y: (by + 0.5) / GRID }, fit);
@@ -34,7 +35,7 @@ export function MapPinHeatmap({
         const r = fit.drawW * (0.006 + 0.02 * Math.sqrt(count / maxCount));
         ctx.beginPath();
         ctx.arc(centre.x, centre.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.55)';
+        ctx.fillStyle = dotColor;
         ctx.fill();
       }
       ctx.restore();

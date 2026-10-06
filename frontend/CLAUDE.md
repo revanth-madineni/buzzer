@@ -42,6 +42,39 @@ Live-game state is React state in each game app's `pages/game/GameLayout.tsx`, e
   each `index.html`), proxies `/api/` and `/socket.io/` to the backend, and redirects `/` to
   `/player/`. **All three apps and the API share one origin here.**
 
+### Theme system (T9)
+Light and dark themes in all three apps, from one set of semantic colour tokens. The spec is
+`docs/plans/t9-theming.md`, and the evidence (screenshots, checklist) is `docs/ui/README.md`.
+- **Tokens.** Each app's `src/theme.css` defines the tokens as RGB-channel CSS variables
+  (`--surface: 30 41 59`) in fixed blocks:
+  - invariant tokens: answer colours, map overlays, the QR tile, the scrim;
+  - dark values, which are also the fallback;
+  - light values;
+  - in the host only, `[data-stage]` overrides that raise projected game screens to 7:1.
+
+  `tailwind.config.ts` maps every token to `rgb(var(--name) / <alpha-value>)` and
+  **replaces** the Tailwind palette, so components use `bg-surface`, `text-fg-muted`,
+  `bg-scrim/70` and so on. A raw palette class such as `bg-slate-800` compiles to nothing,
+  with no error. No `dark:` variants are used anywhere.
+- **Switching.** The theme is `data-theme="light|dark"` on `<html>`.
+  - **First paint:** a classic inline script in each `index.html` sets it before first paint.
+    A stored choice wins; otherwise `prefers-color-scheme` decides.
+  - **After load:** `src/lib/theme.ts` (a small store, initialised in `main.tsx`) keeps it
+    following the OS until the user toggles, then persists the choice.
+  - **The toggle:** `src/components/ThemeToggle.tsx` is the button. Each page or layout
+    renders its own; nothing matches route paths.
+- **Per-app storage keys.** Each `index.html` declares its key once, as
+  `<html data-theme-key="buzzer:theme:host|player|admin">`. Unlike the login token (see
+  Gotchas), the keys are deliberately separate, so toggling the admin console on the shared
+  nginx origin never flips the projector. No app may call `localStorage.clear()`.
+- **Focus.** One global `:focus-visible` outline (2px `focus`, 2px transparent offset) in each
+  `index.css`, with no per-component focus classes. `data-fill` (focus inside a filled
+  container) and `.focus-inset` (inside clipping containers) cover the two cases it can't.
+- **The gate: `python scripts/check_theme.py`.** It checks for raw colours, WCAG contrast of
+  the token pairs and the byte-identical groups. It is a **manual pre-MR gate, not in CI**:
+  `.gitlab-ci.yml` stays unmodified, and the MR template carries it as a checklist item.
+  Narrow it while working with `--app` and `--check`.
+
 ### How the three apps relate to one role model
 The backend has two separate role systems (`backend/app/models/CLAUDE.md`). No frontend
 enforces either; every check is server-side (`backend/app/common/CLAUDE.md`,
@@ -101,9 +134,13 @@ Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
   the player's `api.ts` is older, and its `ui/*` are re-tuned for touch. Socket payload types in
   `host/src/types/` and `player/src/types/` are hand-written, already drift from the server, and
   hard-code event names from `backend/app/websocket/events.py`. A fix or a new question type
-  must be applied per app. T7's map-pin pieces are kept **byte-identical** on purpose across
-  all three apps: `lib/mapPin.ts`, `lib/images.ts`, `components/MapCanvas.tsx`. Edit one,
-  copy to the other two (a quick `md5` of the three copies should show one hash).
+  must be applied per app. Some files are kept **byte-identical** on purpose, and
+  `scripts/check_theme.py` checks it (one md5 per group). Edit one copy, then copy it to the
+  others:
+  - in all three apps: `tailwind.config.ts`, `lib/theme.ts`, `components/ThemeToggle.tsx`
+    (T9) and `lib/mapPin.ts`, `lib/images.ts`, `components/MapCanvas.tsx` (T7);
+  - in player and admin: `src/theme.css` (the host's is the same text plus the stage blocks);
+  - in host and admin: `components/ui/{button,card,input}.tsx`.
 - **Two question editors.** The host `pages/manage/QuestionEditorPage.tsx` is an adapted copy of
   the admin one (host endpoints, no JSON export). A form change must be made in both.
 - **Adding a question type** touches both `QuestionEditorPage`s (form + `answer_data` keys,
@@ -114,6 +151,16 @@ Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
 - **No frontend test runner.** None of the three apps can run tests, so the map-pin canvas,
   pointer handling, image loading and the player's non-fatal late-answer handling were only
   type-checked and built. Verify them by hand on a phone and a projector.
+- **Stale config build output (fixed in T9).** `tsconfig.node.json` is composite and includes
+  `vite.config.ts` and `tailwind.config.ts`. Before T9, `tsc -b` (in `npm run build`) emitted
+  `vite.config.js` and `tailwind.config.js` beside them. Vite and Tailwind load the `.js`
+  config before the `.ts` one, so `.ts` edits were silently ignored under `npm run dev`.
+  `"emitDeclarationOnly": true` now stops that.
+  - **To verify:** after `npm run build`, `ls frontend/*/tailwind.config.js
+    frontend/*/vite.config.js` finds nothing (`check_theme.py --check identical` also fails if
+    one exists).
+  - **Old checkouts:** a checkout from before T9 may still have the old `.js` files; delete
+    them.
 - **`docker compose up` doesn't build the frontends.** nginx mounts `frontend/*/dist`
   read-only. Run `npm run build` first, and again after every frontend change; there's no hot
   reload through nginx. Use `npm run dev` for iterative work.

@@ -3,7 +3,8 @@
 ## Purpose
 Small shared helpers for the admin (desktop) app: a JSON fetch wrapper for the REST API with
 the full set of verbs plus multipart upload and file download, a Tailwind class-merge
-helper, and (T7) map-pin geometry and authenticated image loading. There is no socket code and no role logic here. The admin app never opens a socket.
+helper, (T7) map-pin geometry and authenticated image loading, and (T9) the theme store.
+There is no socket code and no role logic here. The admin app never opens a socket.
 
 ## Contents
 - `api.ts` — every method sends `Authorization: Bearer <localStorage.token>` when a token
@@ -20,7 +21,11 @@ helper, and (T7) map-pin geometry and authenticated image loading. There is no s
     `<a download>`. Used for CSV/JSON/HTML exports.
 - `utils.ts` — `cn(...)` (clsx + tailwind-merge), used by `components/ui/*`.
 - `mapPin.ts` (T7) — map-pin geometry and drawing, **byte-identical to the player's and
-  host's copies** (see `frontend/player/src/lib/CLAUDE.md`). Untested (no test runner).
+  host's copies** (see `frontend/player/src/lib/CLAUDE.md`, including T9's cached
+  `mapColor`). Untested (no test runner).
+- `theme.ts` (T9) — the light/dark theme store, **byte-identical in all three apps**; see
+  `frontend/player/src/lib/CLAUDE.md`. This app's key is `buzzer:theme:admin`, read from
+  `<html data-theme-key>` in `index.html`.
 - `images.ts` (T7) — `loadImage` / `preloadImages`: images fetched with the Bearer token as
   blob URLs, promise cached per ID, failures evicted, one shared `POST /api/auth/refresh` +
   retry on a 401. Byte-identical to the other apps' copies.
@@ -58,8 +63,9 @@ matters on a `restricted` game, for a user who is HOST on its course (see
 `backend/app/models/CLAUDE.md`).
 
 The auth token lives in `localStorage['token']`. It is written by `LoginPage`, read here, and
-removed by the sidebar Logout in `App.tsx`. `App.tsx`'s `RequireAdmin` only checks that the key
-is **present**, despite its name.
+removed by the sidebar Logout in `App.tsx` (`removeItem('token')` only, so the theme key
+survives). `App.tsx`'s `RequireAdmin` only checks that the key is **present**, despite its
+name.
 
 ## Gotchas
 - **No client-side admin check.** `/auth/login` issues tokens to any account with a password,
@@ -83,6 +89,8 @@ is **present**, despite its name.
   401 for an image); `api.ts` has no 401 retry. After the
   2 h access token expires every call fails, but `RequireAdmin` still lets the user in.
 - JSON methods set `Content-Type: application/json` even on GET/DELETE.
+- **Never call `localStorage.clear()`** in any app: it would also wipe the theme keys, and the
+  three apps share one origin behind nginx.
 - This file is identical to the host app's `lib/api.ts`, but it is a copy, not shared. All
   helpers use one `errorMessage` function. The player's `lib/api.ts` is older and still reads
   only `detail`. A fix has to be made in each app.

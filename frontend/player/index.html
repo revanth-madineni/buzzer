@@ -1,8 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme-key="buzzer:theme:player">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Apply the theme before first paint: a stored choice wins, otherwise the OS decides.
+      // Must agree with src/lib/theme.ts (getStored / resolve); change both together.
+      try {
+        (function () {
+          var root = document.documentElement;
+          var key = root.getAttribute('data-theme-key');
+          var stored = null;
+          if (key) {
+            try {
+              stored = localStorage.getItem(key);
+            } catch (e) {}
+          }
+          var theme =
+            stored === 'light' || stored === 'dark'
+              ? stored
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+          root.setAttribute('data-theme', theme);
+        })();
+      } catch (e) {}
+    </script>
     <title>Buzzer</title>
   </head>
   <body>

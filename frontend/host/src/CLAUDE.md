@@ -11,16 +11,27 @@ downloads.
 
 ## Contents
 Top-level files:
-- `main.tsx` — Mounts `<App />` in `StrictMode` and imports `index.css`.
+- `main.tsx` — Imports `theme.css` then `index.css`, calls `initTheme()` (`lib/theme.ts`)
+  before `createRoot`, and mounts `<App />` in `StrictMode`.
 - `App.tsx` — `react-router` routes under basename `import.meta.env.BASE_URL` (`/host/` in
   production, `/` in dev): `/login`, `/home`, `/game/:code/{lobby,question,results,gameover}`
   nested under `GameLayout`, and `/courses/:courseId/{games,games/:gameId/questions,roster,
   sessions}` nested under `HostLayout` (defined in `App.tsx`). `HostLayout` has a course picker
   from `my-courses`; switching course keeps the section. It also has Games / Roster / Sessions
-  links, "Play" (→ `/home`) and Sign out. Everything except `/login` sits behind `RequireAuth`,
-  which only checks that `localStorage.token` is **present**. Anything else redirects to
-  `/login`.
-- `index.css` — Tailwind directives and global dark-slate body styles.
+  links, "Play" (→ `/home`), the theme toggle and Sign out. Everything except `/login` sits
+  behind `RequireAuth`, which only checks that `localStorage.token` is **present**. Anything
+  else redirects to `/login`.
+- `theme.css` (T9) — the colour tokens as RGB-channel CSS variables (`--surface: 30 41 59`):
+  invariant tokens, dark values (also the fallback), light values, and the host-only
+  `[data-stage]` overrides for the game screens (`pages/CLAUDE.md`). Its block selectors are
+  parsed literally by `scripts/check_theme.py`; don't restyle them.
+- `index.css` — Tailwind directives and the token-based base rules: page background and text
+  colour, placeholders, `accent-color` for native checkboxes and sliders, the one global
+  `:focus-visible` outline, the `data-fill` rules (inside a filled container, focus takes the
+  fill's text colour) and the `.focus-inset` utility.
+- `../index.html` — declares this app's theme storage key as `<html data-theme-key=
+  "buzzer:theme:host">` (the only place it is written) and runs a small inline script that
+  sets `data-theme` before first paint. The script must agree with `lib/theme.ts`.
 - `types/game.ts` — TypeScript shapes for socket payloads (`SyncStatePayload`,
   `QuestionPayload` incl. `gradingType`/`editDistance`/`startedAt`, `HostResultsPayload`,
   `AnswerReveal`, `HostGameOverPayload`, `HostQuestionSummaryItem`, …) and `HostPhase`. It has
@@ -29,15 +40,16 @@ Top-level files:
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
-| `lib/` | `api.ts` REST wrapper (`get`/`post`/`put`/`patch`/`delete`, `postForm`, `download`; Bearer token from `localStorage.token`; shows the server's error `message`), `cn()`, and (T7) `mapPin.ts` + `images.ts`. No role logic. |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the display-only `TimerBar` (supports a mid-question `initialSeconds`), and (T7) `MapCanvas` + `MapPinHeatmap`. |
+| `lib/` | `api.ts` REST wrapper (`get`/`post`/`put`/`patch`/`delete`, `postForm`, `download`; Bearer token from `localStorage.token`; shows the server's error `message`), `cn()`, (T7) `mapPin.ts` + `images.ts`, and (T9) the theme store `theme.ts`. No role logic. |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the display-only `TimerBar` (supports a mid-question `initialSeconds`), (T7) `MapCanvas` + `MapPinHeatmap`, and (T9) `ThemeToggle`. |
 | `pages/` | `LoginPage`, `HomePage` (course → that course's games, "Manage this course", active sessions), `game/*`, and `manage/*` (Games, QuestionEditor, Roster, Sessions). `game/GameLayout.tsx` owns the socket and shares state via `useGame()`. |
 
 ## How it fits together
 Dependency direction: `pages/` → `components/` + `lib/` + `types/`. There's no global store.
 All live-game state is React state in `GameLayout`, exposed through context. The only
 persistent client state is `localStorage.token`, which is shared with the player and admin
-apps (see Gotchas).
+apps (see Gotchas), and the theme choice under `buzzer:theme:host`, which is deliberately
+**not** shared, so toggling the admin console never flips the projector.
 
 In dev, Vite proxies `/api` and `/socket.io` to `localhost:8000`. Behind nginx, all three apps
 and the API share one origin. The server side is described in `backend/app/CLAUDE.md` and its
@@ -114,6 +126,9 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
 - **`types/game.ts` is hand-maintained**, not generated from the backend. It omits fields the
   server sends (e.g. `sync_state`'s `role` and `questionIndex`), and the event names are string
   literals duplicated from `backend/app/websocket/events.py`.
+- **Colours come only from theme tokens.** The Tailwind palette is replaced, so a leftover raw
+  class (`bg-slate-800`) compiles to nothing, with no error; `dark:` variants aren't used. Run
+  `python scripts/check_theme.py` before an MR; it isn't in CI. See `frontend/CLAUDE.md`.
 - `StrictMode` double-runs effects in dev, so `GameLayout` connects, disconnects, and reconnects
   on mount. A host socket disconnect during `IN_PROGRESS` auto-locks the question server-side
   and the rejoin auto-unlocks it (`websocket/CLAUDE.md`), so reloading mid-game in dev can

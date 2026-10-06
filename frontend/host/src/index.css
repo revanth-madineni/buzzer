@@ -6,8 +6,59 @@
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
-  background: #0f172a;
-  color: #f8fafc;
+@layer base {
+  :root {
+    accent-color: rgb(var(--accent));
+  }
+
+  body {
+    margin: 0;
+    background: rgb(var(--page));
+    color: rgb(var(--fg));
+  }
+
+  /* Same selector as preflight's (which sets Tailwind's gray-400), so this later rule wins. Opacity 1:
+     Firefox otherwise dims placeholders below 4.5:1. */
+  input::placeholder,
+  textarea::placeholder {
+    color: rgb(var(--fg-muted));
+    opacity: 1;
+  }
+
+  /* The only focus style (docs/plans/t9-theming.md §4.10). The transparent offset puts the
+     outline on whatever surrounds the element. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--focus));
+    outline-offset: 2px;
+  }
+
+  /* Focusable elements inside a non-focusable filled container focus in the fill's text
+     colour, because the outline lands on the fill. */
+  [data-fill='accent'] {
+    --focus: var(--on-accent);
+  }
+
+  [data-fill='success'] {
+    --focus: var(--on-success);
+  }
+
+  [data-fill='danger'] {
+    --focus: var(--on-danger);
+  }
+
+  [data-fill='warning'] {
+    --focus: var(--on-warning);
+  }
+
+  [data-fill='scrim'] {
+    --focus: var(--on-scrim);
+  }
+}
+
+@layer utilities {
+  /* For controls inside overflow-hidden/-auto containers, which would clip the outline.
+     Never on filled buttons. */
+  .focus-inset:focus-visible {
+    outline-offset: -2px;
+  }
 }
