@@ -18,7 +18,7 @@ All three apps hardcode one dark palette. Colour is written directly into JSX as
 classes: about 916 uses across 47 files, with about 70% of them slate. On top of that:
 
 - each `src/index.css` hardcodes `#0f172a` and `#f8fafc` on `body`;
-- the shared map-pin code draws with 17 `rgba()` literals.
+- the shared map-pin code draws with 17 `rgba()` literals and 9 `'white'` literals.
 
 There is no light theme, no toggle and no shared vocabulary for colour. Some text already fails
 WCAG AA in the current dark theme:
@@ -67,8 +67,8 @@ We need:
 6. **Some colours don't change with the theme**, because they sit on top of something the theme
    doesn't control:
    - the 8 player answer colours, each with its own text colour;
-   - the map-overlay colours (pin, target, radius circles, heatmap), which are drawn on the map
-     image;
+   - the map-overlay colours (pin, target, radius circles, heatmap, white outlines), which are
+     drawn on the map image;
    - the white QR-code tile;
    - a `scrim` (black) with `on-scrim` (white) text, for anything drawn over an image or as an
      overlay.
@@ -287,6 +287,7 @@ The host doesn't use `answer-N`. If it ever does, add stage overrides first.
 | `map-pin` | player's pin | `#dc2626` | — |
 | `map-pin-disabled` | pin while input is disabled | `#64748b` | — |
 | `map-heat` | heatmap dots (alpha 0.55) | `#ef4444` | — |
+| `map-outline` | outline of the target dot and the pin, and the pin's inner dot (alpha 1) | `#ffffff` | — |
 | `qr-tile` | white tile behind every QR code | `#ffffff` | — |
 | `scrim` | overlay behind anything drawn over an image, and modal backdrops; always used with alpha | `#000000` | `on-scrim` `#ffffff` |
 
@@ -472,7 +473,7 @@ A tiny external store with no React context.
 
 | app | rendered by | position |
 |---|---|---|
-| host | `HostLayout` (in `App.tsx`): covers games, questions, roster and sessions | in its header next to Sign out, `showLabel` |
+| host | `HostLayout` (in `App.tsx`): covers games, questions, roster and sessions | sidebar, directly above Sign out (in the bottom section with Play), `showLabel`. `HostLayout` has no header. |
 | host | `LoginPage`, `HomePage` | `fixed top-4 right-4 z-40` |
 | host | `game/GameLayout` (inside the stage wrapper, in both its normal and error returns): covers lobby, question, results and game over | `fixed top-4 right-4 z-40`. The corner QR panel is bottom-right. Every stage page centres its content at `max-w-4xl` (896px, the heatmap) or narrower, so the top-right 64×64 px is empty at both 1280×720 and 1920×1080. Confirm this on the screenshots. |
 | player | `JoinPage`, `NamePage`, `game/LobbyPage`, `game/FeedbackPage`, `game/ResultsPage`, `game/GameOverPage` | `fixed top-3 right-3 z-40`. Each of these pages adds `pt-16` to its root element so content can never slide under the button, including when it overflows at 360×640. |
@@ -585,6 +586,10 @@ Work file by file and apply this table.
   - Guests allowed → success;
   - live session → accent.
 
+  Session status chips (admin `SessionsPage`): `LOBBY` and `IN_PROGRESS` → accent (both are
+  live sessions), `COMPLETED` → neutral, `ABANDONED` → danger. The common case stays quiet,
+  so live and abandoned sessions stand out.
+
 ### 4.12 Per-app notes
 
 **Host**
@@ -657,7 +662,7 @@ Work file by file and apply this table.
 ### 4.13 Canvas and map code
 
 - **`lib/mapPin.ts`** (byte-identical ×3) gets one helper,
-  `mapColor(name: 'full' | 'full-fill' | 'zero' | 'pin' | 'pin-disabled' | 'heat', alpha = 1)`:
+  `mapColor(name: 'full' | 'full-fill' | 'zero' | 'pin' | 'pin-disabled' | 'heat' | 'outline', alpha = 1)`:
   - It reads `getComputedStyle(document.documentElement).getPropertyValue('--map-' + name)`,
     trims it, and **caches it per name** in a module-level map. The `--map-*` tokens are
     invariant, so the cache never goes stale. The heatmap calls the helper once per dot, so
@@ -669,8 +674,10 @@ Work file by file and apply this table.
 
   Replace each literal with a call: the zero circle is `mapColor('zero', 0.95)`, the full-credit
   fill is `('full-fill', 0.25)`, the full-credit stroke and target dot are `('full')`. The
-  default colour of `drawPin` becomes `mapColor('pin')`, resolved inside the function and not
-  as a default-parameter literal.
+  three `'white'` literals (the target dot's outline in `drawTarget`, and the pin's outline and
+  inner dot in `drawPin`) become `mapColor('outline')`. The default colour of `drawPin`
+  becomes `mapColor('pin')`, resolved inside the function and not as a default-parameter
+  literal.
 - **`player/src/components/MapPinCanvas.tsx`:** the disabled pin uses
   `mapColor('pin-disabled')`.
 - **`host/src/components/MapPinHeatmap.tsx`:** dots use `mapColor('heat', 0.55)`.
@@ -1081,3 +1088,16 @@ Per `.claude/rules/context-sync.md`, update:
 - 2026-10-05 — Implementation: the "before" set (step 0) was taken before the goldfish revision
   added `host-results-wordcloud` and `player-question-multi`. Those two screens get "after"
   images only (§4.16); 17 "before" images, 38 "after".
+- 2026-10-05 — Implementation review before step 3. **User decisions:**
+  - **`map-outline` token added.** `mapPin.ts` draws the target dot's outline, the pin's
+    outline and the pin's inner dot in `'white'` (9 literals across the three copies), which no
+    token covered and which §4.15's named-colour check rejects. The new invariant token is
+    `map-outline` (`#ffffff`), and `mapColor` gains `'outline'` (§4.3, §4.13). Like the other
+    map tokens it is drawn on the image, so it has no contrast pairs. The escape hatch was
+    rejected: it would have meant 9 ignored lines.
+  - **Host toggle placement.** `HostLayout` has no header; Sign out is at the bottom of its
+    sidebar. The toggle goes in the sidebar directly above Sign out (§4.9), as in the admin
+    app. A fixed top-right toggle was rejected because management pages scroll inside an
+    `overflow-auto` `<main>` with their own top-right actions.
+  - **Session status chips.** `LOBBY` and `IN_PROGRESS` → accent, `COMPLETED` → neutral,
+    `ABANDONED` → danger (§4.11 badge convention).
