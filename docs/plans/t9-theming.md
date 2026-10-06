@@ -366,8 +366,10 @@ Keep the three `@tailwind` directives and `box-sizing`. Remove the hardcoded `bo
 **In `@layer base`:**
 
 - **`body`:** background `rgb(var(--page))`, colour `rgb(var(--fg))`.
-- **`::placeholder`:** colour `rgb(var(--fg-muted))`, `opacity: 1`. Firefox otherwise dims
-  placeholders below 4.5:1.
+- **`input::placeholder, textarea::placeholder`:** colour `rgb(var(--fg-muted))`,
+  `opacity: 1`. Firefox otherwise dims placeholders below 4.5:1. Use this selector, not a bare
+  `::placeholder`: Tailwind's preflight sets `input::placeholder, textarea::placeholder` to
+  `#9ca3af`, and its higher specificity would win (2.5:1 on a light surface).
 - **`:root`:** `accent-color: rgb(var(--accent))`. This replaces the six
   `accent-indigo-500` classes on native checkboxes and range sliders.
 - **`:focus-visible`:** `outline: 2px solid rgb(var(--focus)); outline-offset: 2px`.
@@ -1136,3 +1138,7 @@ Per `.claude/rules/context-sync.md`, update:
   `bg-accent text-on-accent` with a ✓ before the label (§4.11, §4.14); the accent fill alone is
   2.3–2.8:1 against dark surfaces, so the ✓ carries the state. Both sidebars' active link also
   uses the accent fill (§4.12).
+- 2026-10-05 — Implementation, step 6: the §4.6 placeholder rule's selector becomes
+  `input::placeholder, textarea::placeholder`. As a bare `::placeholder` it lost to Tailwind
+  preflight's rule of the same name, which has higher specificity, so every placeholder stayed
+  `#9ca3af` (2.5:1 on a light surface).
