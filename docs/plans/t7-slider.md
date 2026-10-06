@@ -1,0 +1,496 @@
+# T7 — Slider Question Type (party)
+
+Status: agreed design, **not yet goldfish-tested**. Written 2026-10-06.
+Scope: the second of the two T7 types (the party one). The classroom type is `map_pin`
+(`docs/plans/t7-map-pin.md`), which already satisfies T7's canvas requirement, so this type is
+not canvas-based.
+
+Architecture context lives in the CLAUDE.md hierarchy. Read `backend/app/CLAUDE.md`,
+`backend/app/{schemas,services,websocket,routers}/CLAUDE.md` and `frontend/CLAUDE.md` before
+implementing. `map_pin` is the worked example of a full question-type slice: where this spec
+says "as map_pin does", the map_pin code is the reference.
+
+---
+
+## 1. Problem
+
+Party quizzes are at their best with "closest guess" questions ("How many hot dogs did the
+2024 champion eat in 10 minutes?") and "vibes" questions ("How spicy is a jalapeño, from Ice
+cold to Lava?"). Buzzer's four types can only ask these as multiple choice or as an exact
+numeric fill-in. Both are all-or-nothing, so "close" scores the same as "wildly wrong", and the
+fun of seeing how far off the room was is lost.
+
+We need a question where every player sets a slider between two ends and is scored by **how
+close** they got to the author's target, with partial credit that falls off with distance. The
+projector then shows where the room's guesses landed.
+
+**Hard constraint (team decision):** each answer is scored **on its own**, from the question
+and that answer only. Nothing in scoring may depend on other players' answers.
+
+## 2. Technical plan (summary)
+
+- New question `type` **`slider`**. No change to the `questions` table, so no migration.
+  Everything specific to the type lives in the existing `config` and `answer_data` JSON columns.
+- **One type covers two uses:**
+  - **Numeric** ("closest guess"): numbers are shown, with an optional unit ("hot dogs").
+  - **Spectrum** ("Ice cold ↔ Lava"): words at both ends and **no numbers shown anywhere**.
+  The backend sees only numbers either way. The spectrum is an editor preset (0–100, step 1,
+  `showValue: false`, both end labels).
+- `config` holds `min`, `max`, `step`, `showValue`, and an optional `unit`, `minLabel` and
+  `maxLabel`. `answer_data` holds `target`, `fullRadius` and `zeroRadius`.
+- **Everything is on the step grid.** The range must be a whole number of steps (at most
+  10,000). The target must be exactly on a step. Player answers are **rejected** outside
+  `[min, max]` and **snapped** to the nearest step inside it. Internally the server works on
+  **step indices** `k = (value − min) / step`, which are exact integers, so floating-point
+  noise like `0.30000000000000004` never reaches scoring.
+- **Scoring:**
+  - distance = |guess index − target index| ÷ number of steps, a fraction of the range;
+  - full points within `fullRadius`, falling in a straight line to zero at `zeroRadius`;
+  - this is the same falloff as map_pin, with the same helper;
+  - `is_correct` means "within `fullRadius`";
+  - no speed bonus;
+  - defaults: 0.05 / 0.30 (one set for both uses).
+- **COMPLETENESS** gives full points for any valid answer, but shows the **same** reveal as
+  ACCURACY, as map_pin does.
+- **Player:** a large horizontal slider whose knob **starts at the middle step**, with − / +
+  buttons that move one step, then **Confirm**. No auto-submit at time-up.
+- **Host (projector):** while the question is open, the prompt plus the scale (the end labels
+  or min/max with unit). On results, a histogram of guesses in up to 20 bins across the range,
+  with the target marked and the full-credit band shaded.
+
+## 3. Alternatives considered
+
+| Alternative | Why it lost |
+|---|---|
+| Scoring that depends on other players (closest guess wins, Wits & Wagers betting, voting) | Team decision: each answer is scored alone. It would also need a new phase after locking, because `calculate_score` runs per answer at submit time. |
+| Free-number entry (keypad) with log-ratio scoring | Answers that span orders of magnitude need log-scale distance, but log fails for years, zero and negative numbers, so it would need two tolerance modes. Typing big numbers on a phone (missing zeros) is error-prone. With a slider, `min`/`max` set the scale, so linear distance is fair. |
+| Two separate types (numeric and spectrum) | Same backend, scoring and reveal. The only difference is presentation (labels vs numbers), which `showValue` and the labels express. One type halves the work in the four reveal copies, both editors and six pages. |
+| Knob hidden until the first tap (no default position) | Rejected by the team in favour of starting at the middle. Accepted risk: a player who just presses Confirm answers "middle". Guards: Confirm is still required, there is no auto-submit, and the editors warn when the target is within `fullRadius` of the middle (§4.11). |
+| Different default radii for numeric vs spectrum | Team decision: one set of defaults (0.05 / 0.30), which the author can change per question. |
+| Target anywhere in range, not necessarily on a step | The step is the author's increment. A target between steps can't be hit exactly, and requiring it on the grid makes scoring exact integer arithmetic. |
+| Accept and snap out-of-range answers | Honest clients clamp to the range before sending, so an out-of-range value means a tampered client. Rejecting it (as map_pin does with x > 1) is simpler to reason about. |
+| Logarithmic slider option | Useful for "population of X" questions, but it adds a second distance model. Out of scope for v1. Authors pick a sensible linear range. |
+| Unit as prefix or suffix (e.g. `$`) | One suffix `unit` string keeps formatting identical on every screen. "dollars" works as a suffix. |
+| Canvas-drawn slider | Not needed: map_pin already meets the canvas requirement, and a native `<input type="range">` gives keyboard and screen-reader access for free. |
+
+## 4. Detailed implementation
+
+### 4.0 Conventions
+
+- A **valid number** means what it means in map_pin's spec: a JSON number, `int` or `float`
+  but **not `bool`**, and finite. Use the existing `schemas/admin.py` `is_valid_number`.
+- **Indices.** For a slider config, `N = round((max − min) / step)` is the number of steps,
+  and positions are the integers `k ∈ [0, N]`, where position `k` has value `min + k × step`.
+  "Index" always means this integer.
+- **Tolerance** `EPS = 1e-6`, in index units, everywhere a float must be checked against the
+  grid.
+- **Decimals** `D` = the display precision: `max(decimals(min), decimals(step))`, where
+  `decimals(x)` is the smallest `d ∈ 0..6` with `|x × 10^d − round(x × 10^d)| ≤ 1e-9`. Values
+  are always shown with exactly `D` decimals.
+- Errors follow the existing conventions: Pydantic `ValueError` → 422 `VALIDATION_ERROR`, and
+  socket errors via `_emit_error`.
+
+### 4.1 Data shapes
+
+**`config`** (public, sent to players in `new_question`; nothing secret goes here):
+
+| key | required | rule |
+|---|---|---|
+| `min` | yes | valid number, `abs(min) ≤ 1e12`, at most 6 decimals |
+| `max` | yes | valid number, `abs(max) ≤ 1e12`, `max > min` |
+| `step` | yes | valid number, `step > 0`, at most 6 decimals |
+| `showValue` | no, default `true` | `bool` |
+| `unit` | no | string, 1–20 characters after stripping |
+| `minLabel`, `maxLabel` | no | strings, 1–40 characters after stripping; **both or neither** |
+| `promptImageId` | no | allowed as on every type (T8, existing `_validate_question_images`) |
+
+Further rules:
+- `n = (max − min) / step` must satisfy `|n − round(n)| ≤ EPS`, and `1 ≤ round(n) ≤ 10000`.
+- `showValue: false` requires `minLabel` and `maxLabel`, otherwise the phone would show a bare
+  track.
+- Unknown keys → 422 (`optionImageIds` is already rejected for non-choice types).
+
+**`answer_data`** (secret; the **same rule for both grading types**, because both show the
+same reveal):
+
+| key | rule |
+|---|---|
+| `target` | valid number with `min ≤ target ≤ max`, **on the grid**: `kt = (target − min) / step` satisfies `|kt − round(kt)| ≤ EPS` |
+| `fullRadius` | valid number, `0.01 ≤ fullRadius < 1` |
+| `zeroRadius` | valid number, `fullRadius < zeroRadius ≤ 1` |
+
+Unknown keys → 422. Radii are **fractions of the range** (`max − min`), so "0.05" means "within
+5% of the slider's length".
+
+**Player answer** (socket `submit_answer.answer_data`): exactly `{ "value": <number> }`.
+
+**Example (numeric):**
+```
+config      = { "min": 0, "max": 100, "step": 1, "unit": "hot dogs", "showValue": true }
+answer_data = { "target": 58, "fullRadius": 0.05, "zeroRadius": 0.3 }
+```
+**Example (spectrum):**
+```
+config      = { "min": 0, "max": 100, "step": 1, "showValue": false,
+                "minLabel": "Ice cold", "maxLabel": "Lava" }
+answer_data = { "target": 35, "fullRadius": 0.05, "zeroRadius": 0.3 }
+```
+
+### 4.2 Validation — `backend/app/schemas/admin.py`
+
+- Add `slider` to `QUESTION_TYPE_PATTERN`. It is shared by `QuestionCreate` and
+  `QuestionUpdate`.
+- Add constants `SLIDER_MAX_STEPS = 10000`, `SLIDER_MIN_FULL_RADIUS = 0.01`,
+  `SLIDER_MAX_ABS = 1e12`, `SLIDER_EPS = 1e-6`.
+- Add `_validate_slider(config, answer_data)`, implementing every rule in §4.1, and call it
+  from `QuestionCreate.validate_structure` for `type == "slider"`. Like map_pin, it runs for
+  both grading types.
+- Error messages name the field, e.g. "slider target must be on a step (min + a whole number of
+  steps)" and "slider range must be a whole number of steps, at most 10000".
+- **Update symmetry is already handled.** map_pin's work made `question_service.update_question`
+  merge the existing row with the PUT and re-run `QuestionCreate`, so the new branch applies to
+  PUTs on both the admin and host routes with no service change. A test still covers it (§4.13).
+- Slider has no image of its own, so `question_service.resolve_map_pin_image` doesn't apply.
+
+### 4.3 Geometry and scoring — `backend/app/services/game_service.py`
+
+Add a block of pure helpers next to the map_pin ones. They are the **only** slider maths on the
+server; scoring, the gateway, distributions, stats and the report all call them.
+
+```
+slider_geometry(config) -> (min, step, N, D) | None
+    None if min/max/step are missing or invalid, or the range isn't a whole number of steps
+    1..10000. (Defensive: rows written by direct inserts or seed scripts skip validation.)
+
+slider_index(config, value) -> int | None
+    geometry = slider_geometry(config); None if geometry is None or value isn't a valid number
+    k = (value - min) / step
+    if k < -EPS or k > N + EPS: return None        # out of range → rejected
+    return clamp(round(k), 0, N)                    # snap to the nearest step
+
+slider_value(config, k) -> float
+    round(min + k * step, D)                         # the canonical value of index k
+
+slider_bins(N) -> int          B = min(N + 1, 20)
+slider_bin(N, k) -> str        str(floor(k * B / (N + 1)))
+    One bin per position when there are ≤ 20 positions, otherwise 20 equal-width bins.
+
+slider_target_index(config, answer_data) -> int | None
+    slider_index(config, answer_data.target), or None if it's missing or invalid
+
+slider_distance(N, k_guess, k_target) -> float     abs(k_guess - k_target) / N
+```
+
+Scoring reuses **`map_pin_fraction(d, full, zero)`** as-is; the falloff is identical. Rename it
+in this work **only if** the rename also updates every map_pin caller and unit test.
+Otherwise leave it and add a one-line comment that slider uses it too.
+
+**`calculate_score`:** add a `slider` branch next to the map_pin one. The existing empty-answer
+and COMPLETENESS early returns stay first and unchanged, so COMPLETENESS gives full points and
+`is_correct = True`.
+
+```
+_score_slider(question, answer_data):           # ACCURACY
+    geometry = slider_geometry(config); kt = slider_target_index(...)
+    radii = fullRadius, zeroRadius (valid numbers)
+    any missing → log "slider_bad_question", return (0, False)
+    k = slider_index(config, answer_data.value)
+    k is None → log "slider_bad_answer", return (0, False)
+    d = slider_distance(N, k, kt)
+    return (round(points_value * map_pin_fraction(d, full, zero), 2), d <= full)
+```
+Defensive, like `_score_map_pin`: bad data scores 0 and never raises.
+
+**`record_answer`:** for `slider`, `dist_key = slider_bin(N, k)`, where `k` comes from
+`slider_index`. Skip when the geometry or answer is invalid.
+
+**Reveal helper** `slider_reveal(grading_type, config, answer_data) -> dict`. Every key is
+always present, with `null` for missing optional config:
+```
+{ "type": "slider", "gradingType": "ACCURACY" | "COMPLETENESS",
+  "min", "max", "step", "showValue", "unit", "minLabel", "maxLabel",
+  "target", "fullRadius", "zeroRadius" }
+```
+`showValue` defaults to `true` when absent. In **each of the four reveal copies** the `slider`
+check goes **before** the `COMPLETENESS` early return, next to the map_pin check:
+- `get_player_question_summary`
+- `get_host_question_summary`
+- `report_service._answer_reveal`
+- `websocket/gateway._answer_reveal`
+
+**Stats** `slider_stats(config, answer_data, answers) -> {withinFullPct, averageCredit}`: the
+**same keys and meaning** as `map_pin_stats`. They are computed from geometry, not from points,
+so they mean the same under COMPLETENESS and with `points_value == 0`:
+- the denominator is the answers whose `value` gives a non-None `slider_index`;
+- both are `None` when there are no such answers;
+- `withinFullPct` is rounded to 1 decimal, `averageCredit` to 3.
+
+`get_host_question_summary` returns them for slider exactly as it does for map_pin, and rebuilds
+the distribution with `slider_bin`.
+
+### 4.4 Socket gateway — `backend/app/websocket/gateway.py`
+
+- **`on_submit_answer`**, next to the map_pin check:
+  - If `answer_data` isn't exactly `{"value": ...}`, or `slider_index(question.config, value)`
+    is `None` → `_emit_error(sid, "slider answer must include a value within the slider's
+    range")` with **no code** (fatal on the player, like map_pin's bad-payload error; only a
+    tampered client can trigger it). Don't score.
+  - Otherwise **replace** `answer_data` with `{"value": slider_value(config, k)}` before
+    `record_answer`. The stored `SessionScore.answer_data` is then always the canonical,
+    snapped value.
+- **`_answer_reveal`:** the slider branch (§4.3).
+- **`_question_payload`:** no change. `config` is public by design, and the target is in
+  `answer_data`, which is never sent.
+- **Preloading:** none. Slider has no images beyond the generic `promptImageId`, which already
+  flows through `question_image_ids`.
+
+### 4.5 Import / export — `backend/app/routers/admin.py`
+
+No format change; slider questions travel as plain `config` / `answer_data`. Import already
+runs `QuestionCreate` on every question, so invalid slider questions are rejected with the
+existing error format. Bundle version stays as it is today (v1 and v2 import; export writes
+v2). Verify with a round-trip test (§4.13).
+
+### 4.6 Report and CSV — `backend/app/services/report_service.py`, `export_service.py`
+
+- `_answer_reveal`: the slider branch.
+- `_extract_answer_key`: for `slider`, `slider_bin(N, slider_index(config, value))`. The
+  function only receives `q_type` today, so give it the question's `config` too and update its
+  callers.
+- Type badge: `"slider": ("Slider", "badge-slider")`. Add the `badge-slider` CSS next to the
+  existing badges in the report's stylesheet.
+- New `_render_slider(reveal, dist)`: a horizontal bar histogram over the `B` bins in plain
+  inline HTML/CSS:
+  - with `showValue`: each bin labelled with its value range (formatted per §4.0, plus unit);
+  - without `showValue`: the end labels only, under the first and last bin;
+  - the bin containing the target highlighted, and a text line under the chart: "Target: 58
+    hot dogs · full credit within ±5 hot dogs" (numeric), or "Target: 35% of the way from Ice
+    cold to Lava" (spectrum, `showValue: false`). The full-credit width shown is
+    `fullRadius × (max − min)`, formatted.
+- Text stats: within-target % and average credit from `slider_stats`, as for map_pin.
+- `export_service` (CSV): per-question points, so no change. A test confirms slider points
+  appear.
+
+### 4.7 Simulator — `scripts/simulate_players.py`
+
+Add a `slider` branch in the answer generator:
+- with `--game-json` and the target known: with probability `p.accuracy`, a value near the
+  target (Gaussian, σ = 5% of the range);
+- otherwise uniform over the range;
+- always clamped to `[min, max]` and snapped to the grid with the same formula as §4.3.
+
+Extend `_answer_str` to print `value 58`, and update the module docstring's per-type list.
+
+### 4.8 Frontend shared helper — `lib/slider.ts` (player, host, admin; byte-identical)
+
+One file, copied into all three apps, and added to `IDENTICAL_GROUPS` in
+`scripts/check_theme.py` next to `src/lib/mapPin.ts`. It is the client mirror of §4.3, and
+must give the same results:
+
+- `sliderGeometry(config) → { min, max, step, n, decimals } | null` (same rules as the
+  server).
+- `snapIndex(geom, value) → number` (clamped to `[0, n]`).
+- `indexValue(geom, k) → number`, rounded to `decimals` (the server's `slider_value`).
+- `middleIndex(geom) → Math.floor(n / 2)`, the knob's starting position.
+- `binCount(n)` / `binOf(n, k)` / `binRange(geom, b) → { lo, hi }` (the index range of bin `b`:
+  `lo = ceil(b × (n+1) / B)`, `hi = ceil((b+1) × (n+1) / B) − 1`).
+- `sliderDistance(geom, k, kt)` and `sliderFraction(d, full, zero)` for the player's result
+  label.
+- `formatValue(geom, value, unit?) → string`: `toLocaleString('en-US', { minimumFractionDigits:
+  decimals, maximumFractionDigits: decimals })`, plus `" " + unit` when there is a unit.
+- `endLabels(config, geom) → [left, right]`: `minLabel`/`maxLabel` when set, else the
+  formatted `min`/`max` with unit.
+
+There is no frontend test runner (`frontend/CLAUDE.md`), so record in the context docs that this
+file is type-checked only. The backend unit tests (§4.13) cover the same maths.
+
+### 4.9 Player app — `frontend/player/src/`
+
+- **`types/game.ts`:**
+  - add `'slider'` to `QuestionType`;
+  - add a `SliderConfig` (§4.1 config keys) that `QuestionConfig` also extends (`Partial`);
+  - add `SliderAnswer { value: number }`;
+  - add a `SliderReveal` (the §4.3 shape) to the reveal union.
+- **New `components/SliderInput.tsx`:**
+  - Props: `config`, `index`, `onIndexChange`, `disabled`, and optional `reveal` and `myIndex`
+    for results.
+  - **Interactive mode:**
+    - a native `<input type="range" min=0 max=n step=1>`, working **in indices**;
+    - full width, with a large thumb (at least 44 px touch target), themed with tokens only;
+    - `minLabel`/`maxLabel` (or the formatted ends) under the two ends;
+    - with `showValue`, the current value in large type above the track;
+    - − / + buttons on either side, each moving one step and disabled at the ends;
+    - holding a button is **not** required in v1.
+  - **Reveal mode** (static, no input): a track with the player's own marker, the target
+    marker, and the full-credit band shaded (`target ± fullRadius × n` indices, clamped). With
+    `showValue`, values label both markers.
+- **`pages/game/QuestionPage.tsx`:** a `slider` branch modelled on `MapPinQuestion`, keyed by
+  `questionId`:
+  - The index starts at `middleIndex(geom)`.
+  - **Confirm** is enabled when the question isn't locked and nothing has been submitted yet.
+    No "moved" requirement (team decision, §3).
+  - Confirm sends `emitAnswer(questionId, { value: indexValue(geom, k) }, msSinceMount)`.
+  - `answerRejected` handling, the "submitted — waiting" text and the "locked" text are the
+    same as map_pin's.
+  - No auto-submit at time-up.
+  - A malformed config (`sliderGeometry` null) shows "This question can't be answered." with
+    no input.
+- **`pages/game/GameLayout.tsx`:** on `answer_received` for a pending `slider` answer, save it
+  to `sessionStorage` under `buzzer:slider:{code}:{questionId}`, in a try/catch, mirroring the
+  map_pin pin storage, so results survive a reload.
+- **`pages/game/ResultsPage.tsx`:** for `slider`, `SliderInput` in reveal mode. The own value
+  comes from local state, falling back to `sessionStorage`. The label is computed from
+  geometry, as map_pin's is:
+  - no answer, or `answerRejected` → "No answer";
+  - `d ≤ fullRadius` → "Spot on";
+  - `d < zeroRadius` → "Close — partial credit";
+  - otherwise → "Way off".
+  Under COMPLETENESS, append "· full credit for answering". Points and total are shown as
+  today.
+- **`pages/game/GameOverPage.tsx`:**
+  - The recap for `slider` counts as completeness when `gradingType === 'COMPLETENESS'`, as
+    map_pin does.
+  - With `showValue`, it shows "You: 42 hot dogs · Answer: 58 hot dogs".
+  - Without `showValue`, it shows points earned / possible, as map_pin does.
+
+### 4.10 Host app — `frontend/host/src/`
+
+- **`types/game.ts`:** the same `QuestionType`, `SliderConfig` and `SliderReveal` additions.
+- **`pages/game/QuestionPage.tsx`:**
+  - Add `slider: 'Slider'` to `typeLabel`.
+  - Under the prompt, show the **scale**: the two `endLabels` at either end of a plain track
+    (no knob), large enough for the back of the room.
+  - With `showValue`, also show the step when it isn't 1 (e.g. "steps of 0.5").
+- **New `components/SliderHistogram.tsx`:**
+  - Props: `reveal`, `distribution` (bin key → count).
+  - Draws `B` vertical bars across the track in theme tokens; their heights are relative to
+    the largest bin.
+  - The full-credit band (`target ± fullRadius` of the range) is shaded behind the bars, and a
+    target marker is placed at its exact position (not its bin).
+  - End labels sit under the track.
+  - With `showValue`, a callout above the marker says "Answer: 58 hot dogs".
+  - Without `showValue`, the marker is labelled "Target", with no number.
+  - Must read from the back of a classroom in both themes and under `[data-stage]`.
+- **`pages/game/ResultsPage.tsx`:** for `slider`, `SliderHistogram` instead of the bar chart,
+  for both grading types. COMPLETENESS adds the "Participation — full credit for answering"
+  caption, as map_pin does. Add `typeLabel`.
+- **`pages/game/GameOverPage.tsx`:** add `typeLabel`. For `slider`, show `withinFullPct` and
+  `averageCredit` exactly as for map_pin ("—" when null). Generalise the map_pin condition at
+  the stats block to `type === 'map_pin' || type === 'slider'`.
+
+### 4.11 Question editors — admin and host
+
+Make these changes in **both** `frontend/admin/src/pages/QuestionEditorPage.tsx` and
+`frontend/host/src/pages/manage/QuestionEditorPage.tsx`.
+
+- **Type select:** add "Slider (closest guess)".
+- **`FormState` / `defaultForm`:** `sliderMin` (0), `sliderMax` (100), `sliderStep` (1),
+  `sliderUnit` (""), `sliderShowValue` (true), `sliderMinLabel` (""), `sliderMaxLabel` (""),
+  `sliderTarget` (50), `sliderFullRadius` (0.05), `sliderZeroRadius` (0.30). Keep the existing
+  map_pin radius fields separate; don't reuse them.
+- **Preset buttons** above the fields:
+  - **Numeric** sets `showValue: true` and leaves the range alone.
+  - **Spectrum** sets min 0, max 100, step 1, `showValue: false`, clears the unit, and fills
+    the labels with "Cold" / "Hot" **only if they are empty**.
+  Presets only fill fields; nothing about them is saved.
+- **Fields:** min, max and step (number inputs), unit, the two end labels, a "Show numbers to
+  players" checkbox, and the radii as number inputs (`fullRadius` 0.01–0.99, `zeroRadius` up to
+  1, step 0.01) shown as percentages of the range.
+- **Target:** a live preview of the player's slider (the app's copy of `lib/slider.ts`).
+  Dragging it sets `sliderTarget`, so the target is always on the grid. A number input next to
+  it shows the snapped value. Typing an off-grid value shows the same error the server would.
+- **Client checks** (block saving, with the message shown): every §4.1 rule, so the form
+  rarely hits a server 422. The server stays authoritative.
+- **Warnings** (shown, never block):
+  - target within `fullRadius` of the middle: "Players who don't move the slider will score
+    well";
+  - `showValue` on with no unit: "Consider a unit so players know what they're guessing".
+- **`formToPayload`:**
+  - `config = { min, max, step, showValue }`, plus `unit` / `minLabel` / `maxLabel` only when
+    non-empty, plus `promptImageId` as today;
+  - `answer_data = { target, fullRadius, zeroRadius }` for both grading types.
+- **`questionToForm`:** the reverse. Missing `showValue` → `true`.
+- **List rendering:** "Slider — 0–100 hot dogs, target 58, ±5% → 30%", or for a spectrum
+  "Slider — Ice cold ↔ Lava, target 35%".
+
+### 4.12 Context docs
+
+Per `.claude/rules/context-sync.md`, update the `CLAUDE.md` files that describe question types
+and identical groups. That means at least `backend/app/schemas/`, `services/` and `websocket/`,
+`frontend/CLAUDE.md` (the "Adding a question type" gotcha and the byte-identical list), and the
+player/host `pages/` and `components/` files.
+
+### 4.13 Tests
+
+**Unit — `tests/unit/test_slider_math.py`** (pure helpers, no stack):
+1. `slider_geometry`:
+   - 0–100 step 1 → N = 100;
+   - 0–1 step 0.1 → N = 10;
+   - 0–0.3 step 0.1 → N = 3 (float noise);
+   - 0–10 step 3 → None (not whole);
+   - 0–1e6 step 1 → None (> 10000 steps).
+2. `slider_index`:
+   - snaps 57.4 → 57 and 57.6 → 58;
+   - `min − 1` → None;
+   - `max + 1` → None;
+   - exactly `max` → N;
+   - NaN, `"5"` and `True` → None.
+3. `slider_value`: 0–0.3 step 0.1, index 3 → `0.3` exactly, not `0.30000000000000004`.
+4. `slider_bin`: N = 10 → 11 bins, bin = k. N = 100 → 20 bins: k = 0 → "0", k = 100 → "19",
+   and the bins cover 0..100 with no gaps.
+5. The §4.1 validator: every rule has one rejecting case and one accepting case, including
+   "`showValue: false` without labels", "only one label", "target off-grid" and "radius 0.009".
+
+**Integration — `tests/integration/test_slider.py`** (against the live stack, using
+`conftest.py` and the `t4_helpers.py` game helpers):
+1. **Create validation (admin and host routes):** a valid numeric and a valid spectrum
+   question → 201. An off-grid target, `fullRadius ≥ zeroRadius`, `max ≤ min`, 10001 steps,
+   or a missing `target` under COMPLETENESS → 422.
+2. **Update symmetry:** a PUT changing only `answer_data.target` to an off-grid value → 422,
+   and the row is unchanged. A PUT changing `type` from `multiple_choice` to `slider` without a
+   slider config → 422. A valid PUT → 200. Covered on both admin and host routes.
+3. **Scoring** (drive a real game; 0–100 step 1, target 50, full 0.05, zero 0.30,
+   `points_value` 10):
+   - value 50 → 10 points, `is_correct`;
+   - value 55 (d = 0.05, at the boundary) → 10, `is_correct`;
+   - value 67.5 → snapped to 68, d = 0.18 → `10 × (1 − 0.13/0.25)` = 4.8 points, not correct;
+   - value 80 → 0 points;
+   - the leaderboard total includes the 4.8 (floats end to end).
+4. **COMPLETENESS:** a value of 100 against target 50 → full points, and the reveal still
+   carries `target` and both radii.
+5. **Socket validation:** `{value: 101}`, `{value: "50"}`, `{value: null}`, `{}`,
+   `{value: 50, extra: 1}` and a raw `NaN` → `error`, and no `SessionScore` row.
+6. **Canonical storage:** submit `0.30000000000000004` to a 0–1 step 0.1 question → the stored
+   `answer_data` is `{"value": 0.3}`.
+7. **Distribution and reveal:** after several answers, the host's `question_results` has bin
+   keys matching `slider_bin`, and the reveal has every §4.3 key (optional ones `null`). The
+   host summary at game over has `withinFullPct` and `averageCredit` with the expected values.
+8. **Import/export:** export a game containing both slider presets, then import it → identical
+   `config` / `answer_data`. Importing a bundle with an off-grid target → 422.
+9. **Report and CSV:** the HTML report for a session with a slider question contains the
+   slider badge and the target line. The CSV includes the slider points.
+
+### 4.14 Sample games (T6)
+
+Not part of this spec's implementation, but it unblocks them: each member's party game must
+contain at least one slider question. Ship both presets in the first one (see §4.1 examples).
+
+## 5. Out of scope
+
+- Logarithmic sliders; prefix units (`$58`); several targets or target ranges.
+- Holding the − / + buttons to repeat.
+- Any scoring that looks at other players' answers.
+- Server-measured answer time (the existing gotcha, unchanged).
+
+## 6. Known risks
+
+- **The middle default gives free points** when the target is near the middle. It's accepted
+  and mitigated by an editor warning only.
+- **Phone slider precision:** at 10,000 steps a drag lands only within about 30 steps, so
+  hitting the exact target takes − / + taps. Full credit covers at least 1% of the range
+  (minimum `fullRadius`, about 100 steps at the cap), so precision affects bragging, not
+  scoring.
+- **Spectrum targets are subjective.** Generous default radii and a clear reveal are the
+  mitigation; arguing about it is part of the party.
+- **The frontend maths isn't tested** (no runner). The backend tests cover the same formulas,
+  and §4.8 requires the client copy to match them line for line.
