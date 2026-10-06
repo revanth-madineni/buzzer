@@ -860,7 +860,9 @@ True/False. One room therefore produces every screen.
 That is 19 screens, so 38 "after" images. There are 17 "before" images: `host-results-wordcloud`
 and `player-question-multi` were added to this list after the "before" set was taken, and they
 have **no before image**. They need only the two "after" images, and their `docs/ui/README.md`
-rows show "—" in the before column.
+rows show "—" in the before column. The same applies to `player-gameover`: the committed
+`before/player-gameover.png` shows the **host** game-over screen (histogram, "New Game", QR
+panel), so that row also shows "—" and says why; the file is left as committed.
 
 **Before-image size.** The committed "before" images were captured from a laptop browser window
 (about 1400×680 CSS px at 2×), not at the viewports above; the player ones are desktop-width.
@@ -1142,3 +1144,6 @@ Per `.claude/rules/context-sync.md`, update:
   `input::placeholder, textarea::placeholder`. As a bare `::placeholder` it lost to Tailwind
   preflight's rule of the same name, which has higher specificity, so every placeholder stayed
   `#9ca3af` (2.5:1 on a light surface).
+- 2026-10-05 — Implementation, step 8: `before/player-gameover.png` turned out to be a host
+  game-over capture, so `player-gameover` is treated as having no before image (§4.16); 16
+  usable before images, 38 after.
