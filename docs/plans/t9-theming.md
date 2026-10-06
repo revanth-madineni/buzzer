@@ -839,7 +839,10 @@ True/False. One room therefore produces every screen.
 | player | `join`, `question-mc`, `question-multi` (one option selected), `question-map`, `results-map`, `gameover` |
 | admin | `users`, `access`, `question-editor-map`, `sessions-export` (export panel open) |
 
-That is 19 screens, so 19 "before" images and 38 "after" images.
+That is 19 screens, so 38 "after" images. There are 17 "before" images: `host-results-wordcloud`
+and `player-question-multi` were added to this list after the "before" set was taken, and they
+have **no before image**. They need only the two "after" images, and their `docs/ui/README.md`
+rows show "—" in the before column.
 
 ### 4.17 T8 and later code
 
@@ -1075,3 +1078,6 @@ Per `.claude/rules/context-sync.md`, update:
   - **Cross-references:** the pinch-zoom reference now points to §4.7, and step 7 no longer
     repeats step 3.
   - **Values:** all new pairs were computed from the stated values and pass.
+- 2026-10-05 — Implementation: the "before" set (step 0) was taken before the goldfish revision
+  added `host-results-wordcloud` and `player-question-multi`. Those two screens get "after"
+  images only (§4.16); 17 "before" images, 38 "after".
