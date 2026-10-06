@@ -247,7 +247,7 @@ function RadiusInput({
 }) {
   return (
     <div className="flex-1">
-      <label className="block text-xs text-slate-400 mb-1">{label}</label>
+      <label className="block text-xs text-fg-muted mb-1">{label}</label>
       <div className="flex items-center gap-2">
         <input
           type="range"
@@ -256,7 +256,7 @@ function RadiusInput({
           step={0.005}
           value={Math.min(value, MAP_PIN_SLIDER_MAX)}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="flex-1 accent-indigo-500"
+          className="flex-1"
         />
         <Input
           type="number"
@@ -314,7 +314,7 @@ function MapPinFields({
   return (
     <div className="space-y-3">
       <div>
-        <label className="block text-xs text-slate-400 mb-1">
+        <label className="block text-xs text-fg-muted mb-1">
           {form.imageId ? 'Replace image' : 'Upload image'} (PNG, JPEG or WebP, up to 2 MB)
         </label>
         <input
@@ -325,15 +325,15 @@ function MapPinFields({
             void handleFile(e.target.files?.[0]);
             e.target.value = '';
           }}
-          className="block text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-700 file:px-3 file:py-1.5 file:text-slate-100"
+          className="block text-sm text-fg file:mr-3 file:rounded-lg file:border-0 file:bg-surface-hover file:px-3 file:py-1.5 file:text-fg"
         />
-        {uploading && <p className="text-slate-400 text-xs mt-1">Uploading…</p>}
-        {uploadError && <p className="text-red-400 text-xs mt-1">{uploadError}</p>}
+        {uploading && <p className="text-fg-muted text-xs mt-1">Uploading…</p>}
+        {uploadError && <p className="text-danger-fg text-xs mt-1">{uploadError}</p>}
       </div>
 
       {form.imageId && form.imageWidth && form.imageHeight && (
         <div>
-          <p className="text-xs text-slate-400 mb-1">
+          <p className="text-xs text-fg-muted mb-1">
             {target
               ? `Target (${target.x.toFixed(3)}, ${target.y.toFixed(3)}) — click or drag to move it`
               : 'Click the image to set the target'}
@@ -365,11 +365,11 @@ function MapPinFields({
         />
       </div>
       {form.fullRadius < MAP_PIN_EASY_FULL_RADIUS && form.fullRadius >= MAP_PIN_MIN_FULL_RADIUS && (
-        <p className="text-amber-400 text-xs">
+        <p className="text-warning-fg text-xs">
           A full-credit radius below {MAP_PIN_EASY_FULL_RADIUS} may be hard to hit on a phone.
         </p>
       )}
-      <p className="text-slate-500 text-xs">
+      <p className="text-fg-muted text-xs">
         Full points inside the solid circle, falling linearly to zero at the dashed circle.
         {form.grading === 'COMPLETENESS' &&
           ' Completeness: any tap gets full points; the target and circles are still shown at reveal.'}
@@ -403,9 +403,9 @@ function QuestionForm({
       {/* Type + grading */}
       <div className="flex gap-3">
         <div className="flex-1">
-          <label className="block text-xs text-slate-400 mb-1">Question type</label>
+          <label className="block text-xs text-fg-muted mb-1">Question type</label>
           <select
-            className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 text-sm"
+            className="w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg text-sm"
             value={form.type}
             onChange={(e) => set('type', e.target.value as QuestionType)}
           >
@@ -417,9 +417,9 @@ function QuestionForm({
           </select>
         </div>
         <div className="flex-1">
-          <label className="block text-xs text-slate-400 mb-1">Grading</label>
+          <label className="block text-xs text-fg-muted mb-1">Grading</label>
           <select
-            className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 text-sm"
+            className="w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg text-sm"
             value={form.grading}
             onChange={(e) => set('grading', e.target.value as GradingType)}
           >
@@ -431,9 +431,9 @@ function QuestionForm({
 
       {/* Prompt */}
       <div>
-        <label className="block text-xs text-slate-400 mb-1">Prompt</label>
+        <label className="block text-xs text-fg-muted mb-1">Prompt</label>
         <textarea
-          className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none text-sm"
+          className="w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg resize-none text-sm"
           rows={3}
           placeholder="Question text\u2026"
           value={form.prompt}
@@ -445,11 +445,11 @@ function QuestionForm({
       {/* Type-specific */}
       {form.type === 'multiple_choice' && (
         <div>
-          <label className="block text-xs text-slate-400 mb-2">Options</label>
+          <label className="block text-xs text-fg-muted mb-2">Options</label>
           {form.grading === 'ACCURACY' && (
             <div className="flex gap-2 mb-1 px-0.5">
-              <span className="flex-1 text-xs text-slate-500">Answer text</span>
-              <span className="w-24 text-xs text-slate-500">Points</span>
+              <span className="flex-1 text-xs text-fg-muted">Answer text</span>
+              <span className="w-24 text-xs text-fg-muted">Points</span>
               {form.mcOptions.length > 2 && <span className="w-7" />}
             </div>
           )}
@@ -507,11 +507,11 @@ function QuestionForm({
 
       {form.type === 'multi_select' && (
         <div>
-          <label className="block text-xs text-slate-400 mb-2">Options</label>
+          <label className="block text-xs text-fg-muted mb-2">Options</label>
           {form.grading === 'ACCURACY' && (
             <div className="flex gap-2 mb-1 px-0.5">
-              <span className="flex-1 text-xs text-slate-500">Answer text</span>
-              <span className="w-24 text-xs text-slate-500">Points (neg = penalty)</span>
+              <span className="flex-1 text-xs text-fg-muted">Answer text</span>
+              <span className="w-24 text-xs text-fg-muted">Points (neg = penalty)</span>
               {form.msOptions.length > 2 && <span className="w-7" />}
             </div>
           )}
@@ -564,7 +564,7 @@ function QuestionForm({
             </Button>
           </div>
           {form.grading === 'ACCURACY' && (
-            <p className="text-slate-500 text-xs mt-1">
+            <p className="text-fg-muted text-xs mt-1">
               Correct options: positive pts. Distractors: negative pts (penalty). Score = sum of selected, capped at 0.
             </p>
           )}
@@ -573,10 +573,10 @@ function QuestionForm({
 
       {form.type === 'true_false' && form.grading === 'ACCURACY' && (
         <div>
-          <label className="block text-xs text-slate-400 mb-2">Points per answer</label>
+          <label className="block text-xs text-fg-muted mb-2">Points per answer</label>
           <div className="flex gap-4">
             <div>
-              <span className="text-slate-300 text-sm">True:</span>
+              <span className="text-fg text-sm">True:</span>
               <Input
                 type="number"
                 value={form.tfTruePoints}
@@ -587,7 +587,7 @@ function QuestionForm({
               />
             </div>
             <div>
-              <span className="text-slate-300 text-sm">False:</span>
+              <span className="text-fg text-sm">False:</span>
               <Input
                 type="number"
                 value={form.tfFalsePoints}
@@ -604,10 +604,10 @@ function QuestionForm({
       {form.type === 'fill_in_the_blank' && form.grading === 'ACCURACY' && (
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-slate-400 mb-2">Accepted answers</label>
+            <label className="block text-xs text-fg-muted mb-2">Accepted answers</label>
             <div className="flex gap-2 mb-1 px-0.5">
-              <span className="flex-1 text-xs text-slate-500">Answer text</span>
-              <span className="w-24 text-xs text-slate-500">Points</span>
+              <span className="flex-1 text-xs text-fg-muted">Answer text</span>
+              <span className="w-24 text-xs text-fg-muted">Points</span>
               {form.fibAnswers.length > 1 && <span className="w-7" />}
             </div>
             <div className="space-y-2">
@@ -659,7 +659,7 @@ function QuestionForm({
             </div>
           </div>
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Edit distance tolerance (fuzzy match)</label>
+            <label className="block text-xs text-fg-muted mb-1">Edit distance tolerance (fuzzy match)</label>
             <Input
               type="number"
               value={form.fibEditDistance}
@@ -676,7 +676,7 @@ function QuestionForm({
       {/* Time + points */}
       <div className="flex gap-4">
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Time limit (seconds)</label>
+          <label className="block text-xs text-fg-muted mb-1">Time limit (seconds)</label>
           <Input
             type="number"
             value={form.timeLimitSeconds}
@@ -688,7 +688,7 @@ function QuestionForm({
         </div>
         {(form.grading === 'COMPLETENESS' || form.type === 'map_pin') && (
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Points value</label>
+            <label className="block text-xs text-fg-muted mb-1">Points value</label>
             <Input
               type="number"
               value={form.pointsValue}
@@ -702,7 +702,7 @@ function QuestionForm({
         )}
       </div>
 
-      {formError && <p className="text-red-400 text-sm">{formError}</p>}
+      {formError && <p className="text-danger-fg text-sm">{formError}</p>}
       <div className="flex gap-3">
         <Button
           type="button"
@@ -845,7 +845,7 @@ export default function QuestionEditorPage() {
     map_pin: 'Map',
   };
 
-  if (loading) return <div className="p-8 text-slate-400">Loading\u2026</div>;
+  if (loading) return <div className="p-8 text-fg-muted">Loading\u2026</div>;
 
   return (
     <div className="p-8 max-w-4xl space-y-6">
@@ -853,12 +853,12 @@ export default function QuestionEditorPage() {
         <div>
           <button
             onClick={() => navigate('/games')}
-            className="flex items-center gap-2 text-slate-400 hover:text-slate-100 text-sm mb-2"
+            className="flex items-center gap-2 text-fg-muted hover:text-fg text-sm mb-2"
           >
             <ArrowLeft size={14} /> Back to Games
           </button>
-          <h2 className="text-2xl font-bold text-slate-100">{game?.title}</h2>
-          <p className="text-slate-400 text-sm mt-0.5">{questions.length} question{questions.length !== 1 ? 's' : ''}</p>
+          <h2 className="text-2xl font-bold text-fg">{game?.title}</h2>
+          <p className="text-fg-muted text-sm mt-0.5">{questions.length} question{questions.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex gap-2">
           <Button
@@ -876,12 +876,12 @@ export default function QuestionEditorPage() {
         </div>
       </div>
 
-      {error && <p className="text-red-400 text-sm">{error}</p>}
+      {error && <p className="text-danger-fg text-sm">{error}</p>}
 
       {/* Add question form */}
       {showAddForm && (
         <Card>
-          <CardHeader><h3 className="font-semibold text-slate-100">New Question</h3></CardHeader>
+          <CardHeader><h3 className="font-semibold text-fg">New Question</h3></CardHeader>
           <CardContent>
             <QuestionForm
               initial={defaultForm()}
@@ -896,7 +896,7 @@ export default function QuestionEditorPage() {
 
       {/* Question list */}
       {questions.length === 0 && !showAddForm && (
-        <p className="text-slate-400">No questions yet. Add one above.</p>
+        <p className="text-fg-muted">No questions yet. Add one above.</p>
       )}
 
       <div className="space-y-4">
@@ -905,7 +905,7 @@ export default function QuestionEditorPage() {
             {editingId === q.id ? (
               <>
                 <CardHeader>
-                  <h3 className="font-semibold text-slate-100">Edit Question {i + 1}</h3>
+                  <h3 className="font-semibold text-fg">Edit Question {i + 1}</h3>
                 </CardHeader>
                 <CardContent>
                   <QuestionForm
@@ -924,14 +924,14 @@ export default function QuestionEditorPage() {
                   <button
                     onClick={() => void moveQuestion(i, -1)}
                     disabled={i === 0}
-                    className="text-slate-500 hover:text-slate-200 disabled:opacity-20"
+                    className="text-fg-muted enabled:hover:text-fg disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ChevronUp size={16} />
                   </button>
                   <button
                     onClick={() => void moveQuestion(i, 1)}
                     disabled={i === questions.length - 1}
-                    className="text-slate-500 hover:text-slate-200 disabled:opacity-20"
+                    className="text-fg-muted enabled:hover:text-fg disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ChevronDown size={16} />
                   </button>
@@ -939,16 +939,16 @@ export default function QuestionEditorPage() {
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-slate-500 text-xs font-mono">Q{i + 1}</span>
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">
+                    <span className="text-fg-muted text-xs font-mono">Q{i + 1}</span>
+                    <span className="px-1.5 py-0.5 rounded text-xs bg-surface-alt text-fg-muted">
                       {typeLabel[q.type]}
                     </span>
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">
+                    <span className="px-1.5 py-0.5 rounded text-xs bg-surface-alt text-fg-muted">
                       {q.grading_type}
                     </span>
-                    <span className="text-slate-500 text-xs">{q.time_limit_seconds}s \u00b7 {q.points_value}pts</span>
+                    <span className="text-fg-muted text-xs">{q.time_limit_seconds}s \u00b7 {q.points_value}pts</span>
                   </div>
-                  <p className="text-slate-100 text-sm leading-relaxed">{q.prompt}</p>
+                  <p className="text-fg text-sm leading-relaxed">{q.prompt}</p>
 
                   {q.type === 'multiple_choice' && (
                     <div className="mt-2 space-y-1">
@@ -956,11 +956,11 @@ export default function QuestionEditorPage() {
                         const pts = ((q.answer_data['answer_points'] as number[]) ?? [])[oi] ?? 0;
                         return (
                           <div key={oi} className="flex items-center gap-2 text-xs">
-                            <span className={pts > 0 ? 'text-green-400' : 'text-slate-500'}>
+                            <span className={pts > 0 ? 'text-success-fg' : 'text-fg-muted'}>
                               {pts > 0 ? '\u2713' : '\u25cb'}
                             </span>
-                            <span className={pts > 0 ? 'text-slate-200' : 'text-slate-400'}>{opt}</span>
-                            {pts > 0 && <span className="text-slate-500">({pts}pts)</span>}
+                            <span className={pts > 0 ? 'text-fg' : 'text-fg-muted'}>{opt}</span>
+                            {pts > 0 && <span className="text-fg-muted">({pts}pts)</span>}
                           </div>
                         );
                       })}
@@ -972,7 +972,7 @@ export default function QuestionEditorPage() {
                       {(['true', 'false'] as const).map((k) => {
                         const pts = (q.answer_data['answer_points'] as Record<string, number>)?.[k] ?? 0;
                         return (
-                          <span key={k} className={pts > 0 ? 'text-green-400' : 'text-slate-500'}>
+                          <span key={k} className={pts > 0 ? 'text-success-fg' : 'text-fg-muted'}>
                             {k.charAt(0).toUpperCase() + k.slice(1)}: {pts}pts
                           </span>
                         );
@@ -981,16 +981,16 @@ export default function QuestionEditorPage() {
                   )}
 
                   {q.type === 'fill_in_the_blank' && (
-                    <div className="mt-2 text-xs text-slate-400">
+                    <div className="mt-2 text-xs text-fg-muted">
                       Accepted: {((q.answer_data['acceptedAnswers'] as string[]) ?? []).join(', ')}
                       {(q.answer_data['editDistance'] as number) > 0 && (
-                        <span className="ml-2 text-slate-500">(\u00b1{q.answer_data['editDistance'] as number} edit distance)</span>
+                        <span className="ml-2 text-fg-muted">(\u00b1{q.answer_data['editDistance'] as number} edit distance)</span>
                       )}
                     </div>
                   )}
 
                   {q.type === 'map_pin' && (
-                    <div className="mt-2 text-xs text-slate-400">
+                    <div className="mt-2 text-xs text-fg-muted">
                       {mapPinSummary(q)}
                     </div>
                   )}
@@ -1002,11 +1002,11 @@ export default function QuestionEditorPage() {
                         const isCorrect = pts > 0;
                         return (
                           <div key={oi} className="flex items-center gap-2 text-xs">
-                            <span className={isCorrect ? 'text-green-400' : pts < 0 ? 'text-red-400' : 'text-slate-500'}>
+                            <span className={isCorrect ? 'text-success-fg' : pts < 0 ? 'text-danger-fg' : 'text-fg-muted'}>
                               {isCorrect ? '\u2713' : pts < 0 ? '\u2212' : '\u25cb'}
                             </span>
-                            <span className={isCorrect ? 'text-slate-200' : 'text-slate-400'}>{opt}</span>
-                            {pts !== 0 && <span className="text-slate-500">({pts > 0 ? '+' : ''}{pts}pts)</span>}
+                            <span className={isCorrect ? 'text-fg' : 'text-fg-muted'}>{opt}</span>
+                            {pts !== 0 && <span className="text-fg-muted">({pts > 0 ? '+' : ''}{pts}pts)</span>}
                           </div>
                         );
                       })}
