@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..common.dependencies import (
     require_course_host,
     require_game_host,
+    require_image_host,
     require_question_host,
     require_session_host,
     require_user,
@@ -35,6 +36,8 @@ from ..models.user import User
 from ..redis_client import get_redis
 from ..schemas.admin import (
     GameResponse,
+    ImageAltUpdate,
+    ImageListItem,
     ImageResponse,
     QuestionCreate,
     QuestionReorder,
@@ -129,10 +132,12 @@ async def get_game(game: Annotated[Game, Depends(require_game_host)]) -> Game:
     return game
 
 
-async def _guard_write(db: AsyncSession, redis: Redis, game_id: int) -> None:
-    """Game-row lock, then 409 GAME_LIVE if the game is being played (§4.5)."""
-    await game_service.lock_game(db, game_id)
+async def _guard_write(db: AsyncSession, redis: Redis, game_id: int) -> Game:
+    """Game-row lock, then 409 GAME_LIVE if the game is being played (§4.5).
+    Returns the freshly locked game."""
+    game = await game_service.lock_game(db, game_id)
     await game_service.assert_not_live(db, redis, game_id)
+    return game
 
 
 @router.put("/games/{game_id}", response_model=GameResponse)
@@ -222,8 +227,9 @@ async def delete_game(
 async def list_questions(
     game: Annotated[Game, Depends(require_game_host)],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[Question]:
-    return await question_service.list_questions(db, game)
+) -> list[QuestionResponse]:
+    questions = await question_service.list_questions(db, game)
+    return await question_service.question_responses(db, questions)
 
 
 @router.post(
@@ -232,13 +238,14 @@ async def list_questions(
 async def create_question(
     body: QuestionCreate,
     game: Annotated[Game, Depends(require_game_host)],
+    user: Annotated[User, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
-) -> Question:
-    await _guard_write(db, redis, game.id)
-    question = await question_service.create_question(db, game, body)
+) -> QuestionResponse:
+    locked = await _guard_write(db, redis, game.id)
+    question = await question_service.create_question(db, locked, body, user)
     await db.commit()
-    return question
+    return (await question_service.question_responses(db, [question]))[0]
 
 
 @router.post("/games/{game_id}/questions/reorder", status_code=204)
@@ -257,13 +264,14 @@ async def reorder_questions(
 async def update_question(
     body: QuestionUpdate,
     question: Annotated[Question, Depends(require_question_host)],
+    user: Annotated[User, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
-) -> Question:
-    await _guard_write(db, redis, question.game_id)
-    updated = await question_service.update_question(db, question, body)
+) -> QuestionResponse:
+    locked = await _guard_write(db, redis, question.game_id)
+    updated = await question_service.update_question(db, locked, question, body, user)
     await db.commit()
-    return updated
+    return (await question_service.question_responses(db, [updated]))[0]
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)
@@ -313,8 +321,9 @@ async def upload_roster(
 
 
 # ---------------------------------------------------------------------------
-# Images (T7). Stored against the course in the URL. No live-game guard: an upload
-# writes no game or question.
+# Images (T7 upload; T8 list, alt text, delete, replace). Uploads are stored
+# against the course in the URL. Upload, alt text and delete need no live-game
+# guard; replace locks and checks every affected game itself.
 # ---------------------------------------------------------------------------
 
 
@@ -328,8 +337,10 @@ async def upload_image(
     course: Annotated[Course, Depends(require_course_host)],
     user: Annotated[User, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    alt_text: Annotated[str | None, Form()] = None,
 ) -> Image:
-    image = await image_service.store_image(db, await file.read(), user, course.id)
+    alt = image_service.clean_alt_text(alt_text)
+    image = await image_service.store_image(db, await file.read(), user, course.id, alt)
     # Commit before responding: get_db's commit runs after the response is sent, so a
     # client that GETs the image right after the 201 could otherwise get a 404.
     await db.commit()
@@ -337,6 +348,59 @@ async def upload_image(
         "host_image_uploaded", image_id=image.id, course_id=course.id, user_id=user.id
     )
     return image
+
+
+@router.get("/courses/{course_id}/images", response_model=list[ImageListItem])
+async def list_images(
+    course: Annotated[Course, Depends(require_course_host)],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[dict]:
+    """The course's images; uses in games the caller can't use are only counted."""
+    return await image_service.list_images(db, user, course_id=course.id)
+
+
+@router.patch("/images/{image_id}", response_model=ImageResponse)
+async def update_image(
+    body: ImageAltUpdate,
+    image: Annotated[Image, Depends(require_image_host)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Image:
+    await image_service.set_alt_text(db, image, body.alt_text)
+    await db.commit()
+    return image
+
+
+@router.delete("/images/{image_id}", status_code=204)
+async def delete_image(
+    image: Annotated[Image, Depends(require_image_host)],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    await image_service.delete_image(db, image, user)
+    await db.commit()
+
+
+@router.post(
+    "/images/{image_id}/replace", response_model=ImageResponse, status_code=201
+)
+@limiter.limit("30/minute")
+async def replace_image(
+    request: Request,
+    file: Annotated[UploadFile, File(description="PNG, JPEG or WebP, at most 2 MB")],
+    image: Annotated[Image, Depends(require_image_host)],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+    alt_text: Annotated[str | None, Form()] = None,
+) -> Image:
+    """403 FORBIDDEN if any use is in a game the caller can't use (§4.5)."""
+    alt = None if alt_text is None else image_service.clean_alt_text(alt_text)
+    new = await image_service.replace_image(
+        db, redis, image, await file.read(), alt, user
+    )
+    await db.commit()
+    return new
 
 
 # ---------------------------------------------------------------------------

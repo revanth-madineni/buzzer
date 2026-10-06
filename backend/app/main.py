@@ -49,6 +49,8 @@ app.add_middleware(
     rules=[
         ("POST", r"^/api/admin/images$", int(2.5 * MB)),
         ("POST", r"^/api/host/courses/\d+/images$", int(2.5 * MB)),
+        ("POST", r"^/api/admin/images/[^/]+/replace$", int(2.5 * MB)),
+        ("POST", r"^/api/host/images/[^/]+/replace$", int(2.5 * MB)),
         ("POST", r"^/api/admin/games/import$", 26 * MB),
     ],
 )

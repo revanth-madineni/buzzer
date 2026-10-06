@@ -4,6 +4,7 @@ import math
 import secrets
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 import structlog
 from rapidfuzz.distance import Levenshtein
@@ -20,6 +21,7 @@ from ..common.exceptions import (
 )
 from ..models.course import Course, CourseRoster, UserCourseAccess
 from ..models.game import Game, Question
+from ..models.image import Image
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
 from ..schemas.admin import is_valid_number
@@ -148,6 +150,13 @@ async def create_room(
     if host.role == "ADMIN":
         if game.course_id is None:
             game.course_id = course.id
+            # Images follow the game (T8 §4.7a). Lazy import: image_service imports
+            # this module.
+            from . import image_service
+
+            await image_service.rehome_game_images(
+                db, game, course.id, host, apply=True
+            )
             logger.info(
                 "game_attached_on_first_room",
                 game_id=game.id,
@@ -468,24 +477,74 @@ def map_pin_stats(config: dict, answer_data: dict, answers: list) -> dict:
     }
 
 
-def game_image_ids(questions: list[Question]) -> list[str]:
-    """Distinct map_pin image IDs, in question order (for preloading on phones)."""
+ImageRole = Literal["map", "prompt", "option"]
+ImageAudience = Literal["player", "host"]
+
+
+def question_image_ids(type_: str, config: dict | None) -> list[tuple[str, ImageRole]]:
+    """Every `(image_id, role)` a question references, in a fixed order: map
+    (`imageId`, map_pin only), prompt (`promptImageId`), options (`optionImageIds`,
+    non-null entries, in option order; repeats kept).
+
+    **The one place** that knows which config keys hold images (T8 §4.3): export,
+    import, preload, the in-use scan, replace, move and the report all go through it.
+    Values that aren't non-empty strings are ignored, so malformed rows never raise.
+    """
+    config = config if isinstance(config, dict) else {}
+    refs: list[tuple[str, ImageRole]] = []
+    if type_ == "map_pin" and _is_ref(config.get("imageId")):
+        refs.append((config["imageId"], "map"))
+    if _is_ref(config.get("promptImageId")):
+        refs.append((config["promptImageId"], "prompt"))
+    option_ids = config.get("optionImageIds")
+    if isinstance(option_ids, list):
+        refs.extend((i, "option") for i in option_ids if _is_ref(i))
+    return refs
+
+
+def _is_ref(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def repoint_config(type_: str, config: dict, old_id: str, new_id: str) -> dict:
+    """A new config dict with every reference to `old_id` replaced by `new_id`, in
+    every role (all matching `optionImageIds` entries). Map dimensions are left alone;
+    callers that change the image's shape set them. Returns a new dict (and a new list),
+    so SQLAlchemy sees the change."""
+    out = dict(config)
+    if type_ == "map_pin" and out.get("imageId") == old_id:
+        out["imageId"] = new_id
+    if out.get("promptImageId") == old_id:
+        out["promptImageId"] = new_id
+    if isinstance(out.get("optionImageIds"), list):
+        out["optionImageIds"] = [
+            new_id if i == old_id else i for i in out["optionImageIds"]
+        ]
+    return out
+
+
+def game_image_ids(questions: list[Question], audience: ImageAudience) -> list[str]:
+    """Distinct image IDs in question order. `"player"` leaves out prompt images
+    (phones never show the prompt); `"host"` includes every role."""
     ids: list[str] = []
     for q in questions:
-        if q.type == "map_pin":
-            image_id = (q.config or {}).get("imageId")
-            if isinstance(image_id, str) and image_id not in ids:
+        for image_id, role in question_image_ids(q.type, q.config):
+            if audience == "player" and role == "prompt":
+                continue
+            if image_id not in ids:
                 ids.append(image_id)
     return ids
 
 
-async def get_game_image_ids(db: AsyncSession, game_id: int) -> list[str]:
+async def get_game_image_ids(
+    db: AsyncSession, game_id: int, audience: ImageAudience
+) -> list[str]:
     result = await db.execute(
         select(Question)
         .where(Question.game_id == game_id)
         .order_by(Question.order_index)
     )
-    return game_image_ids(list(result.scalars().all()))
+    return game_image_ids(list(result.scalars().all()), audience)
 
 
 def _score_map_pin(question: Question, answer_data: dict) -> ScoreResult:
@@ -676,6 +735,24 @@ async def get_leaderboard(db: AsyncSession, session_id: str) -> list[dict]:
     return [{"user_id": r.user_id, "score": float(r.total_score or 0)} for r in rows]
 
 
+async def _with_image_alt(db: AsyncSession, items: list[dict]) -> list[dict]:
+    """Add `imageAlt` ({id: alt_text}) to each game-over summary item that has
+    images (T8 §4.8), with one metadata query for the whole session."""
+    refs = [
+        {i for i, _ in question_image_ids(item["type"], item["config"])}
+        for item in items
+    ]
+    all_ids = set().union(*refs) if refs else set()
+    if not all_ids:
+        return items
+    result = await db.execute(select(Image).where(Image.id.in_(all_ids)))
+    alts = {image.id: image.alt_text for image in result.scalars().all()}
+    for item, ids in zip(items, refs, strict=True):
+        if ids:
+            item["imageAlt"] = {i: alts[i] for i in ids if i in alts}
+    return items
+
+
 async def get_player_question_summary(
     db: AsyncSession, session_id: str, user_id: str
 ) -> list[dict]:
@@ -754,7 +831,7 @@ async def get_player_question_summary(
             }
         )
 
-    return result
+    return await _with_image_alt(db, result)
 
 
 async def get_host_question_summary(
@@ -915,4 +992,4 @@ async def get_host_question_summary(
             )
         result.append(entry)
 
-    return result
+    return await _with_image_alt(db, result)

@@ -1,6 +1,7 @@
-"""Image storage for map-pin questions (T7, spec docs/plans/t7-map-pin.md §4.3).
+"""Image storage and management (T7 spec docs/plans/t7-map-pin.md §4.3; T8 spec
+docs/plans/t8-images.md §4.6–§4.7a).
 
-Images are immutable. Every upload is rotated upright from its EXIF orientation and
+Image bytes are immutable; only `alt_text` and `course_id` change in place. Every upload is rotated upright from its EXIF orientation and
 re-encoded so no metadata (GPS EXIF, XMP, IPTC, comments, text chunks) reaches players;
 the ICC colour profile is kept. Import re-encodes only images that still carry
 metadata, so Buzzer's own (already clean) exports round-trip byte-for-byte.
@@ -18,13 +19,22 @@ from io import BytesIO
 import structlog
 from PIL import Image as PILImage
 from PIL import ImageOps
-from sqlalchemy import select
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from ..common.exceptions import BuzzerError
+from ..common.exceptions import (
+    BuzzerError,
+    ConflictError,
+    ForbiddenError,
+    ImageInUseError,
+    NotFoundError,
+)
+from ..models.game import Game, Question
 from ..models.image import Image
 from ..models.user import User
+from . import access_service as access
+from . import game_service
 
 logger = structlog.get_logger()
 
@@ -216,7 +226,11 @@ def prepare_image(raw: bytes, *, force_reencode: bool = True) -> PreparedImage:
 
 
 async def store_prepared(
-    db: AsyncSession, prepared: PreparedImage, user: User | None, course_id: int | None
+    db: AsyncSession,
+    prepared: PreparedImage,
+    user: User | None,
+    course_id: int | None,
+    alt_text: str = "",
 ) -> Image:
     """Insert with a new UUID and flush. The caller owns the transaction."""
     image = Image(
@@ -229,9 +243,13 @@ async def store_prepared(
         data=prepared.data,
         uploaded_by_user_id=user.id if user else None,
         course_id=course_id,
+        alt_text=alt_text,
     )
     db.add(image)
     await db.flush()
+    # created_at is a server default: load it now, since responses read it after
+    # the session can no longer lazy-load (async).
+    await db.refresh(image, ["created_at"])
     logger.info(
         "image_stored",
         image_id=image.id,
@@ -243,11 +261,11 @@ async def store_prepared(
 
 
 async def store_image(
-    db: AsyncSession, raw: bytes, user: User, course_id: int | None
+    db: AsyncSession, raw: bytes, user: User, course_id: int | None, alt_text: str = ""
 ) -> Image:
     """Upload path: always re-encoded."""
     return await store_prepared(
-        db, prepare_image(raw, force_reencode=True), user, course_id
+        db, prepare_image(raw, force_reencode=True), user, course_id, alt_text
     )
 
 
@@ -281,3 +299,341 @@ async def get_images_meta(db: AsyncSession, ids: set[str]) -> dict[str, Image]:
         return {}
     result = await db.execute(select(Image).where(Image.id.in_(ids)))
     return {image.id: image for image in result.scalars().all()}
+
+
+# ---------------------------------------------------------------------------
+# T8: alt text, usage, delete, replace, and images following their game.
+# Lock order everywhere (spec §4.0): game rows → image rows → question rows.
+# ---------------------------------------------------------------------------
+
+ALT_TEXT_MAX = 250
+ASPECT_TOLERANCE = 0.01
+
+
+def clean_alt_text(value: str | None) -> str:
+    """Upload/replace form field: stripped, at most 250 chars, else 422."""
+    text = (value or "").strip()
+    if len(text) > ALT_TEXT_MAX:
+        raise BuzzerError(
+            "VALIDATION_ERROR",
+            f"alt_text must be at most {ALT_TEXT_MAX} characters",
+            422,
+        )
+    return text
+
+
+async def lock_images(
+    db: AsyncSession, ids: set[str], *, read: bool
+) -> dict[str, Image]:
+    """`SELECT … WHERE id IN (…) ORDER BY id FOR SHARE|FOR UPDATE`, metadata only."""
+    if not ids:
+        return {}
+    result = await db.execute(
+        select(Image)
+        .where(Image.id.in_(ids))
+        .order_by(Image.id)
+        .with_for_update(read=read)
+        .execution_options(populate_existing=True)
+    )
+    return {image.id: image for image in result.scalars().all()}
+
+
+async def image_usage(
+    db: AsyncSession, image_ids: set[str], *, lock: bool
+) -> dict[str, list[dict]]:
+    """Every use of each image, as `ImageUsage`-shaped dicts (spec §4.6).
+
+    The `LIKE '%imageid%'` pre-filter can't miss a reference: all three keys contain
+    `imageid` case-insensitively. With `lock=True` it is a locking read on **question
+    rows only** (`FOR SHARE OF questions`); without `OF`, MySQL would also lock the
+    joined game rows, taking a game lock after an image lock.
+    """
+    usage: dict[str, list[dict]] = {i: [] for i in image_ids}
+    if not image_ids:
+        return usage
+    stmt = (
+        select(
+            Question.id,
+            Question.game_id,
+            Question.type,
+            Question.config,
+            Game.title,
+            Game.course_id,
+        )
+        .join(Game, Game.id == Question.game_id)
+        .where(func.lower(cast(Question.config, String)).like("%imageid%"))
+    )
+    if lock:
+        stmt = stmt.with_for_update(read=True, of=Question)
+    rows = (await db.execute(stmt)).all()
+
+    found: list[tuple[str, dict]] = []
+    for qid, game_id, type_, config, title, course_id in rows:
+        seen_roles: set[tuple[str, str]] = set()
+        for image_id, role in game_service.question_image_ids(type_, config):
+            if image_id not in image_ids or (image_id, role) in seen_roles:
+                continue
+            seen_roles.add((image_id, role))
+            found.append(
+                (
+                    image_id,
+                    {
+                        "game_id": game_id,
+                        "game_title": title,
+                        "course_id": course_id,
+                        "question_id": qid,
+                        "question_number": 0,
+                        "role": role,
+                    },
+                )
+            )
+    if not found:
+        return usage
+
+    # Position in the game (order_index has gaps after deletes).
+    game_ids = {u["game_id"] for _, u in found}
+    positions: dict[int, int] = {}
+    counters: dict[int, int] = {}
+    ordered = await db.execute(
+        select(Question.id, Question.game_id)
+        .where(Question.game_id.in_(game_ids))
+        .order_by(Question.game_id, Question.order_index, Question.id)
+    )
+    for qid, game_id in ordered.all():
+        counters[game_id] = counters.get(game_id, 0) + 1
+        positions[qid] = counters[game_id]
+    for image_id, u in found:
+        u["question_number"] = positions.get(u["question_id"], 0)
+        usage[image_id].append(u)
+    return usage
+
+
+async def visible_usage(
+    db: AsyncSession, user: User, uses: list[dict]
+) -> tuple[list[dict], int]:
+    """Split uses into those in games the caller can use, and a count of the rest."""
+    if user.role == "ADMIN" or not uses:
+        return uses, 0
+    allowed: dict[int, bool] = {}
+    for game_id in {u["game_id"] for u in uses}:
+        game = await db.get(Game, game_id)
+        allowed[game_id] = bool(game) and await access.can_use_game(db, user, game)
+    visible = [u for u in uses if allowed[u["game_id"]]]
+    hidden = len({u["question_id"] for u in uses if not allowed[u["game_id"]]})
+    return visible, hidden
+
+
+async def list_images(
+    db: AsyncSession,
+    user: User,
+    *,
+    course_id: int | None = None,
+    unassigned: bool = False,
+) -> list[dict]:
+    """Images newest first, each with `usage` and `hidden_usage_count`."""
+    stmt = select(Image).order_by(Image.created_at.desc(), Image.id)
+    if unassigned:
+        stmt = stmt.where(Image.course_id.is_(None))
+    elif course_id is not None:
+        stmt = stmt.where(Image.course_id == course_id)
+    images = list((await db.execute(stmt)).scalars().all())
+    usage = await image_usage(db, {i.id for i in images}, lock=False)
+    items = []
+    for image in images:
+        visible, hidden = await visible_usage(db, user, usage[image.id])
+        items.append(
+            {
+                "id": image.id,
+                "mime_type": image.mime_type,
+                "width": image.width,
+                "height": image.height,
+                "byte_size": image.byte_size,
+                "sha256": image.sha256,
+                "alt_text": image.alt_text,
+                "course_id": image.course_id,
+                "created_at": image.created_at,
+                "usage": visible,
+                "hidden_usage_count": hidden,
+            }
+        )
+    return items
+
+
+async def set_alt_text(db: AsyncSession, image: Image, alt_text: str) -> Image:
+    image.alt_text = alt_text
+    await db.flush()
+    return image
+
+
+async def delete_image(db: AsyncSession, image: Image, user: User) -> None:
+    """Delete an unused image (spec §4.6). No game lock: an image in use can't be
+    deleted, and an unused one isn't in any live game. Flush only."""
+    locked = (await lock_images(db, {image.id}, read=False)).get(image.id)
+    if locked is None:
+        raise NotFoundError(f"Image {image.id} not found")
+    uses = (await image_usage(db, {image.id}, lock=True))[image.id]
+    if uses:
+        visible, hidden = await visible_usage(db, user, uses)
+        raise ImageInUseError(visible, hidden)
+    await db.delete(locked)
+    await db.flush()
+    logger.info("image_deleted", image_id=image.id, user_id=user.id)
+
+
+async def _questions_by_id(
+    db: AsyncSession, question_ids: set[int]
+) -> dict[int, Question]:
+    if not question_ids:
+        return {}
+    result = await db.execute(
+        select(Question)
+        .where(Question.id.in_(question_ids))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return {q.id: q for q in result.scalars().all()}
+
+
+async def replace_image(
+    db: AsyncSession,
+    redis,
+    old: Image,
+    raw: bytes,
+    alt_text: str | None,
+    user: User,
+) -> Image:
+    """Upload a new image and re-point every question that used `old` (spec §4.7).
+    Flush only; the router commits."""
+    prepared = prepare_image(raw, force_reencode=True)  # before any lock
+
+    before = (await image_usage(db, {old.id}, lock=False))[old.id]
+    locked_games = sorted({u["game_id"] for u in before})
+    for game_id in locked_games:
+        await game_service.lock_game(db, game_id)
+        await game_service.assert_not_live(db, redis, game_id)
+
+    locked = (await lock_images(db, {old.id}, read=False)).get(old.id)
+    if locked is None:
+        raise NotFoundError(f"Image {old.id} not found")
+    uses = (await image_usage(db, {old.id}, lock=True))[old.id]
+    if any(u["game_id"] not in locked_games for u in uses):
+        raise ConflictError("Image usage changed; try again")
+
+    if user.role != "ADMIN":
+        _, hidden = await visible_usage(db, user, uses)
+        if hidden:
+            raise ForbiddenError("This image is also used in games you can't access")
+
+    if any(u["role"] == "map" for u in uses):
+        old_aspect = locked.width / locked.height
+        new_aspect = prepared.width / prepared.height
+        if abs(new_aspect - old_aspect) / old_aspect > ASPECT_TOLERANCE:
+            raise BuzzerError(
+                "IMAGE_ASPECT_MISMATCH",
+                "The new image's shape differs from the old one, which would move "
+                "map-pin targets",
+                422,
+            )
+
+    new = await store_prepared(
+        db,
+        prepared,
+        user,
+        locked.course_id,
+        locked.alt_text if alt_text is None else alt_text,
+    )
+    questions = await _questions_by_id(db, {u["question_id"] for u in uses})
+    for q in questions.values():
+        config = game_service.repoint_config(q.type, q.config or {}, old.id, new.id)
+        if q.type == "map_pin" and config.get("imageId") == new.id:
+            config["imageWidth"] = new.width
+            config["imageHeight"] = new.height
+        q.config = config
+    await db.flush()
+    logger.info(
+        "image_replaced",
+        old_image_id=old.id,
+        new_image_id=new.id,
+        questions=len(questions),
+        user_id=user.id,
+    )
+    return new
+
+
+@dataclass(frozen=True)
+class ImageRehome:
+    moved: int
+    copied: int
+
+
+async def rehome_game_images(
+    db: AsyncSession,
+    game: Game,
+    new_course_id: int,
+    user: User,
+    *,
+    apply: bool,
+) -> ImageRehome:
+    """Images follow a game to its course (spec §4.7a): an image only this game uses
+    is re-tagged; one shared with other games is copied and this game re-pointed.
+
+    `apply=False` only counts (unlocked). `apply=True` expects the caller to hold the
+    game-row lock; it then locks images `FOR UPDATE` and scans question rows `FOR
+    SHARE` (game → image → question rows). Flush only.
+    """
+    stmt = select(Question).where(Question.game_id == game.id)
+    if apply:
+        stmt = stmt.with_for_update(read=True).execution_options(populate_existing=True)
+    questions = list((await db.execute(stmt)).scalars().all())
+    ids = set(game_service.game_image_ids(questions, "host"))
+    if not ids:
+        return ImageRehome(0, 0)
+
+    if apply:
+        images = await lock_images(db, ids, read=False)
+    else:
+        images = await get_images_meta(db, ids)
+    usage = await image_usage(db, set(images), lock=apply)
+
+    to_move: list[Image] = []
+    to_copy: list[Image] = []
+    for image_id in sorted(images):
+        image = images[image_id]
+        if image.course_id == new_course_id:
+            continue
+        shared = any(u["game_id"] != game.id for u in usage[image_id])
+        (to_copy if shared else to_move).append(image)
+
+    if apply:
+        for image in to_move:
+            image.course_id = new_course_id
+        for image in to_copy:
+            original = await get_image_with_data(db, image.id)
+            copy = Image(
+                id=str(uuid.uuid4()),
+                mime_type=original.mime_type,
+                width=original.width,
+                height=original.height,
+                byte_size=original.byte_size,
+                sha256=original.sha256,
+                data=original.data,
+                uploaded_by_user_id=user.id,
+                course_id=new_course_id,
+                alt_text=original.alt_text,
+            )
+            db.add(copy)
+            for q in questions:
+                config = game_service.repoint_config(
+                    q.type, q.config or {}, image.id, copy.id
+                )
+                if config != (q.config or {}):
+                    q.config = config
+        await db.flush()
+        logger.info(
+            "game_images_rehomed",
+            game_id=game.id,
+            course_id=new_course_id,
+            moved=len(to_move),
+            copied=len(to_copy),
+        )
+    return ImageRehome(len(to_move), len(to_copy))

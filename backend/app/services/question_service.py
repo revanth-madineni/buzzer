@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..common.exceptions import BuzzerError, ConflictError
 from ..models.game import Game, Question
 from ..models.session import SessionScore
-from ..schemas.admin import QuestionCreate, QuestionUpdate
-from . import image_service
+from ..models.user import User
+from ..schemas.admin import QuestionCreate, QuestionResponse, QuestionUpdate
+from . import game_service, image_service
 
 PROMPT_TAGS = ["b", "i", "br", "u"]
 
@@ -51,31 +52,71 @@ async def list_questions(db: AsyncSession, game: Game) -> list[Question]:
     return list(result.scalars().all())
 
 
-async def resolve_map_pin_image(db: AsyncSession, body: QuestionCreate) -> None:
-    """For map_pin: 422 IMAGE_NOT_FOUND unless the image exists, then overwrite
-    config.imageWidth/imageHeight with its stored dimensions (in place). Images are
-    immutable, so the copy never goes stale and scoring never needs a DB read.
+async def resolve_question_images(
+    db: AsyncSession,
+    body: QuestionCreate,
+    game: Game,
+    user: User,
+    previous_ids: set[str],
+) -> None:
+    """Existence, course scoping and map dimensions for every image the question
+    references (T8 spec §4.4). Runs on create and update, **not** import (import's
+    images aren't stored yet; it sets dimensions from its own PreparedImages).
 
-    Called by create and update. Import doesn't call it: its images aren't stored yet
-    when questions are validated, so it sets dimensions from its own PreparedImages.
+    The `FOR SHARE` lock on each image row blocks a concurrent delete or replace
+    (`FOR UPDATE`) until this transaction commits, so the two can't both pass their
+    checks. Callers run this before writing the question row (lock order: game →
+    image → question rows).
     """
-    if body.type != "map_pin":
+    refs = game_service.question_image_ids(body.type, body.config)
+    ids = {image_id for image_id, _ in refs}
+    if not ids:
         return
-    image_id = body.config["imageId"]
-    image = (await image_service.get_images_meta(db, {image_id})).get(image_id)
-    if image is None:
-        raise BuzzerError("IMAGE_NOT_FOUND", f"Image {image_id} not found", 422)
-    body.config = {
-        **body.config,
-        "imageWidth": image.width,
-        "imageHeight": image.height,
+    images = await image_service.lock_images(db, ids, read=True)
+    for image_id, _ in refs:
+        if image_id not in images:
+            raise BuzzerError("IMAGE_NOT_FOUND", f"Image {image_id} not found", 422)
+    if user.role != "ADMIN":
+        # Only IDs new to the question, so an edit still saves after an admin moved
+        # the game (or for images shared from before a move).
+        for image_id in sorted(ids - previous_ids):
+            image = images[image_id]
+            if image.course_id is None or image.course_id != game.course_id:
+                raise BuzzerError(
+                    "IMAGE_NOT_IN_COURSE",
+                    f"Image {image_id} belongs to a different course",
+                    422,
+                )
+    if body.type == "map_pin":
+        image = images[body.config["imageId"]]
+        body.config = {
+            **body.config,
+            "imageWidth": image.width,
+            "imageHeight": image.height,
+        }
+
+
+async def question_responses(
+    db: AsyncSession, questions: list[Question]
+) -> list[QuestionResponse]:
+    """`QuestionResponse`s with `image_alt` filled in (one metadata query)."""
+    refs = {
+        q.id: {i for i, _ in game_service.question_image_ids(q.type, q.config)}
+        for q in questions
     }
+    meta = await image_service.get_images_meta(db, set().union(*refs.values()))
+    out = []
+    for q in questions:
+        response = QuestionResponse.model_validate(q)
+        response.image_alt = {i: meta[i].alt_text for i in refs[q.id] if i in meta}
+        out.append(response)
+    return out
 
 
 async def create_question(
-    db: AsyncSession, game: Game, body: QuestionCreate
+    db: AsyncSession, game: Game, body: QuestionCreate, user: User
 ) -> Question:
-    await resolve_map_pin_image(db, body)
+    await resolve_question_images(db, body, game, user, set())
     # Auto-assign order_index if not specified
     if body.order_index is None:
         result = await db.execute(
@@ -108,20 +149,34 @@ async def create_question(
 
 
 async def update_question(
-    db: AsyncSession, question: Question, body: QuestionUpdate
+    db: AsyncSession,
+    game: Game,
+    question: Question,
+    body: QuestionUpdate,
+    user: User,
 ) -> Question:
     """Validates the whole merged question, so a PUT can't produce a question that
     create would reject (T7 spec §4.5).
 
     The PUT's non-null fields are overlaid on the existing question's content
     fields; `config` and `answer_data` are replaced whole (send `{}` to clear one).
-    Then: schema validation (422 VALIDATION_ERROR), map_pin image resolution,
-    prompt sanitizing, apply. An existing question that create would reject can't
-    be PUT, even for a prompt-only change, until it is made valid.
+    Then: schema validation (422 VALIDATION_ERROR), image resolution, prompt
+    sanitizing, apply. An existing question that create would reject can't be PUT,
+    even for a prompt-only change, until it is made valid.
     """
     # Locking read: the caller holds the game lock, and the merge must see edits
-    # committed while it waited (see module docstring).
-    await db.refresh(question, with_for_update=True)
+    # committed while it waited (see module docstring). FOR SHARE, not FOR UPDATE
+    # (T8 §4.0): the game lock already serialises writers, and a shared lock doesn't
+    # block an image delete's locking scan, which would deadlock against it.
+    await db.execute(
+        select(Question)
+        .where(Question.id == question.id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
+    previous_ids = {
+        i for i, _ in game_service.question_image_ids(question.type, question.config)
+    }
     changes = body.model_dump(exclude_none=True)
     merged = {field: getattr(question, field) for field in _CONTENT_FIELDS}
     merged.update({k: v for k, v in changes.items() if k in _CONTENT_FIELDS})
@@ -130,7 +185,7 @@ async def update_question(
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
 
-    await resolve_map_pin_image(db, validated)
+    await resolve_question_images(db, validated, game, user, previous_ids)
     validated.prompt = sanitize_prompt(validated.prompt)
     for field in _CONTENT_FIELDS:
         setattr(question, field, getattr(validated, field))
