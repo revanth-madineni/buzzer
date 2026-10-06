@@ -59,8 +59,9 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
   `join_room {room_code, role: "HOST"}` on **every** `connect`, maps server events to state and
   navigation, and exposes `useGame()` (phase, players, currentQuestion, answer counts, lock
   state, results, gameOver, `autoAdvance`, `emitAdvance`, `emitLockQuestion`). Preloads map
-  images on `game_images` (T7). Always renders a corner QR code + room code. Any `error` event replaces the page with a message and
-  "Back to Home".
+  images on `game_images` (T7). Always renders a corner QR code + room code and the theme
+  toggle. Any `error` event replaces the page with a message and "Back to Home". Both returns
+  are wrapped in the T9 stage, `<div data-stage className="contents">` (see "The stage" below).
 - `game/LobbyPage.tsx` — big QR code (`{origin}/player/join?code=…`), room code, player count,
   the auto-advance toggle, and "Start Game" (`host_advance`; disabled at 0 players).
 - `game/QuestionPage.tsx` — question header (number, type, Accuracy/Participation, typo
@@ -69,10 +70,13 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
   "Lock/Unlock Question" toggle (`host_lock_question`), and "Show Results" (`host_advance`,
   always enabled). With auto-advance on, it advances 1.5 s after `answer_phase_ended`.
 - `game/ResultsPage.tsx` — per-question distribution: word cloud for fill-in-the-blank
-  (client-side Levenshtein colours accepted answers), `MapPinHeatmap` for map_pin (both
-  grading types; COMPLETENESS adds a "Participation — full credit for answering" caption),
-  otherwise a bar chart (correct options green; COMPLETENESS questions have no right/wrong). "Next Question" / "Show Final Results"
-  (`host_advance`). With auto-advance on, a 10 s countdown then advances.
+  (client-side Levenshtein marks accepted answers with "✓ ", bold and `success-fg`),
+  `MapPinHeatmap` for map_pin (both grading types; COMPLETENESS adds a "Participation — full
+  credit for answering" caption), otherwise a bar chart. Each bar row is the label, the bar
+  (`chart-correct` for correct options, `chart-bar` otherwise; COMPLETENESS questions have no
+  right/wrong), the count and "✓ Correct" **beside** the bar, never inside it.
+  "Next Question" / "Show Final Results" (`host_advance`). With auto-advance on, a 10 s
+  countdown then advances.
 - `game/GameOverPage.tsx` — anonymous score histogram (~8 buckets up to `maxPossibleScore`),
   average/high/player count, "New Game" (→ `/home`), and a per-question breakdown card
   (distribution, accepted answers, correct %, response rate, average answer time; for map_pin,
@@ -83,6 +87,28 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
 Uses `lib/api.ts` + `lib/utils.ts` (see `lib/CLAUDE.md`) and `components/ui/*` (see
 `components/CLAUDE.md`). Payload types are in `../types/game.ts`. The socket protocol and phase
 machine are defined server-side in `backend/app/websocket/CLAUDE.md`.
+
+### The stage and the theme toggle (T9)
+- **The stage.** `GameLayout` wraps the game screens (lobby, question, results, game over, and
+  its error view) in `<div data-stage className="contents">`. `display: contents` adds no box,
+  so layout is unchanged, but the tokens inherit through it. Inside it, `../theme.css`
+  overrides ten tokens:
+  - five text tokens (`fg-muted`, `accent-fg`, `success-fg`, `danger-fg`, `warning-fg`) are
+    raised to 7:1, because projected text washes out;
+  - five fills (`accent`, `accent-hover`, `success`, `danger`, `danger-hover`) are darkened, so
+    text on them also reaches 7:1.
+
+  The management area, login and home use the normal values.
+- **Readability on the stage.** Student-facing text (prompt, options, counts, word-cloud
+  words, "N / M answered", captions) is at least `text-lg` and `text-fg`. Short uppercase
+  labels next to the value they name may be `text-sm`, never smaller. Don't make anything
+  smaller than it is.
+- **No text on chart fills.** Counts and labels sit beside the bars, on the page background,
+  which the stage text tokens already cover.
+- **Where the toggle renders.** Each page renders it itself: `LoginPage` and `HomePage`
+  (fixed top-right), `GameLayout` (both returns, fixed top-right), and the `HostLayout` sidebar
+  in `../App.tsx` (labelled, above Sign out). Stage content stays within `max-w-4xl`, so the
+  top-right corner is clear for the toggle; the corner QR panel is bottom-right.
 
 ### Who can host what (all enforced server-side; the pages do no checks)
 Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **global**
@@ -164,7 +190,11 @@ Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **glob
   ("8–8.75"), though the bucketing still works.
 - **The per-question UI is split across files.** `typeLabel` lives in `QuestionPage` and
   `GameOverPage`, `optionLabel` in all three game pages. The word cloud's Levenshtein grading is
-  a client-side re-implementation used only for colouring, so it can disagree with the server's
-  fuzzy match. A new question type needs changes in all three files plus `types/game.ts`.
+  a client-side re-implementation used only for marking accepted words, so it can disagree with
+  the server's fuzzy match. A new question type needs changes in all three files plus
+  `types/game.ts`.
 - `GameOverPage` percentages use `totalPlayers` as the bar denominator but `totalAnswered` for
   "% accuracy". Scores are floats server-side and are bucketed with `Math.floor`.
+- **The host never renders the `answer-N` colours** (only the player does), so the stage has
+  no overrides for them. If a host screen ever shows them, add stage overrides first and
+  extend the contrast list in `scripts/check_theme.py`.
