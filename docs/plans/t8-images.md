@@ -1,7 +1,7 @@
 # T8 — Image Support in Questions
 
-Status: agreed design, revised after the first goldfish test (2026-10-06). Re-run the goldfish
-test on this revision before implementing. Written 2026-10-06.
+Status: agreed design, goldfish-tested and revised (2026-10-06). Ready for implementation.
+Written 2026-10-06.
 Scope: T8 in `instructions.md` — images in question prompts, images as answer options, image
 management (view, replace, delete) and alt text, across the backend and all three frontends.
 Builds on the image storage that T7 delivered (`docs/plans/t7-map-pin.md`, §4.3 and §4.16).
@@ -641,3 +641,5 @@ test_images.py}`, `tests/unit/` (new tests), context `CLAUDE.md` files (§4.16).
     multi-select in the HTML report stays out of scope; `question_number` is the position,
     not `order_index + 1`; inner `<img alt="">` on phone option buttons; every question
     payload, including host `sync_state`, goes through `_question_payload`.
+  - Image options apply to both `multiple_choice` and `multi_select` (both types exist).
+    Status set to ready for implementation; no second goldfish test.
