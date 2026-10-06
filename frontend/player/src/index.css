@@ -24,8 +24,10 @@
     touch-action: manipulation;
   }
 
-  /* Opacity 1: Firefox otherwise dims placeholders below 4.5:1. */
-  ::placeholder {
+  /* Same selector as preflight's (which sets Tailwind's gray-400), so this later rule wins. Opacity 1:
+     Firefox otherwise dims placeholders below 4.5:1. */
+  input::placeholder,
+  textarea::placeholder {
     color: rgb(var(--fg-muted));
     opacity: 1;
   }
