@@ -35,8 +35,8 @@ Each pair therefore compares colour and design, not layout at the target size.
 
 - `host-results-wordcloud` and `player-question-multi` were added to the screen list after the
   before set was taken.
-- The committed `before/player-gameover.png` shows the *host* game-over screen, so the player
-  game-over screen has no before image.
+- The before set had no capture of the player game-over screen. A file under that name showed
+  the host game-over screen and was removed.
 
 | Screen | Before | After, dark | After, light | What changed |
 |---|---|---|---|---|
