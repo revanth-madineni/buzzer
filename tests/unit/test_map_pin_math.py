@@ -244,5 +244,5 @@ def test_game_image_ids_distinct_in_question_order() -> None:
         q("map_pin", "a"),
         q("map_pin", "b"),
     ]
-    assert game_image_ids(questions) == ["b", "a"]
-    assert game_image_ids([q("multiple_choice")]) == []
+    assert game_image_ids(questions, "player") == ["b", "a"]
+    assert game_image_ids([q("multiple_choice")], "player") == []
