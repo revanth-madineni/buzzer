@@ -98,17 +98,17 @@ export default function CoursesPage() {
   return (
     <div className="p-8 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-slate-100">Courses</h2>
+        <h2 className="text-2xl font-bold text-fg">Courses</h2>
         <Button onClick={() => { setShowForm(!showForm); setEditingCourse(null); }} size="sm">
           <Plus size={16} className="mr-1" /> New Course
         </Button>
       </div>
 
-      {error && <p className="text-red-400 mb-4 text-sm">{error}</p>}
+      {error && <p className="text-danger-fg mb-4 text-sm">{error}</p>}
 
       {showForm && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Create Course</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-fg">Create Course</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleCreate} className="flex gap-3 flex-wrap">
               <Input
@@ -125,7 +125,7 @@ export default function CoursesPage() {
                 className="flex-1 min-w-48"
                 required
               />
-              <label className="flex items-center gap-2 text-sm text-slate-300">
+              <label className="flex items-center gap-2 text-sm text-fg">
                 <input
                   type="checkbox"
                   checked={allowGuests}
@@ -142,7 +142,7 @@ export default function CoursesPage() {
 
       {editingCourse && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Edit Course</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-fg">Edit Course</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleEdit} className="flex gap-3 flex-wrap">
               <Input
@@ -167,20 +167,20 @@ export default function CoursesPage() {
       )}
 
       {loading ? (
-        <p className="text-slate-400">Loading…</p>
+        <p className="text-fg-muted">Loading…</p>
       ) : courses.length === 0 ? (
-        <p className="text-slate-400">No courses yet. Create one above.</p>
+        <p className="text-fg-muted">No courses yet. Create one above.</p>
       ) : (
         <div className="space-y-3">
           {courses.map((c) => (
             <Card key={c.id} className="flex items-center justify-between px-6 py-4">
               <div>
-                <p className="font-semibold text-slate-100">{c.name}</p>
-                <p className="text-slate-400 text-sm">{c.semester}</p>
+                <p className="font-semibold text-fg">{c.name}</p>
+                <p className="text-fg-muted text-sm">{c.semester}</p>
               </div>
               <div className="flex items-center gap-2">
                 <label
-                  className="flex items-center gap-2 text-sm text-slate-300 mr-2"
+                  className="flex items-center gap-2 text-sm text-fg mr-2"
                   title="Guests join with just a name and email, without a roster entry"
                 >
                   <input type="checkbox" checked={c.allow_guests} onChange={() => void toggleGuests(c)} />

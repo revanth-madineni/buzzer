@@ -29,18 +29,18 @@ function AdminLayout() {
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
       isActive
-        ? 'bg-indigo-600 text-white'
-        : 'text-slate-300 hover:bg-slate-700 hover:text-slate-100'
+        ? 'bg-accent-soft text-accent-fg'
+        : 'text-fg hover:bg-surface-hover'
     }`;
 
-  const sectionClass = 'px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-slate-500';
+  const sectionClass = 'px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted';
 
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
-      <aside className="w-56 shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col">
-        <div className="px-6 py-5 border-b border-slate-700">
-          <h1 className="text-lg font-bold text-white">Buzzer Admin</h1>
+      <aside className="w-56 shrink-0 bg-surface border-r border-line flex flex-col">
+        <div className="px-6 py-5 border-b border-line">
+          <h1 className="text-lg font-bold text-fg">Buzzer Admin</h1>
         </div>
         <nav className="flex-1 p-3 space-y-1">
           <p className={sectionClass}>Admin</p>
@@ -64,11 +64,11 @@ function AdminLayout() {
             <UserX size={16} /> Guests
           </NavLink>
         </nav>
-        <div className="p-3 border-t border-slate-700 space-y-1">
+        <div className="p-3 border-t border-line space-y-1">
           <ThemeToggle showLabel className="w-full justify-start gap-3 px-4" />
           <button
             onClick={logout}
-            className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 hover:text-slate-100 w-full transition-colors"
+            className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-fg hover:bg-surface-hover w-full transition-colors"
           >
             <LogOut size={16} /> Logout
           </button>

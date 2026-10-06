@@ -66,13 +66,13 @@ export default function GuestsPage() {
 
   return (
     <div className="p-8 max-w-4xl space-y-6">
-      <h2 className="text-2xl font-bold text-slate-100">Guest Users</h2>
+      <h2 className="text-2xl font-bold text-fg">Guest Users</h2>
 
-      {error && <p className="text-red-400 text-sm">{error}</p>}
-      {mergeSuccess && <p className="text-green-400 text-sm">{mergeSuccess}</p>}
+      {error && <p className="text-danger-fg text-sm">{error}</p>}
+      {mergeSuccess && <p className="text-success-fg text-sm">{mergeSuccess}</p>}
 
       <Card>
-        <CardHeader><h3 className="font-semibold text-slate-100">Merge Guest into Real User</h3></CardHeader>
+        <CardHeader><h3 className="font-semibold text-fg">Merge Guest into Real User</h3></CardHeader>
         <CardContent>
           <form onSubmit={handleMerge} className="flex gap-3 flex-wrap">
             <Input
@@ -95,17 +95,17 @@ export default function GuestsPage() {
       </Card>
 
       {loading ? (
-        <p className="text-slate-400">Loading\u2026</p>
+        <p className="text-fg-muted">Loading\u2026</p>
       ) : guests.length === 0 ? (
-        <p className="text-slate-400">No guest users.</p>
+        <p className="text-fg-muted">No guest users.</p>
       ) : (
         <div className="space-y-2">
           {guests.map((g) => (
-            <div key={g.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-slate-700 bg-slate-800/40">
+            <div key={g.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-line bg-surface">
               <div>
-                <span className="font-medium text-slate-100">{g.display_name}</span>
-                <span className="text-slate-400 text-sm ml-3">{g.email}</span>
-                <span className="text-slate-500 text-xs ml-3 font-mono">{g.id}</span>
+                <span className="font-medium text-fg">{g.display_name}</span>
+                <span className="text-fg-muted text-sm ml-3">{g.email}</span>
+                <span className="text-fg-muted text-xs ml-3 font-mono">{g.id}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Button
