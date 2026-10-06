@@ -42,7 +42,15 @@ npm run build
 python scripts/seed_demo.py
 python scripts/simulate_players.py --room ABCDE1
 python scripts/smoke_test_websocket.py
+python scripts/check_theme.py   # run before any MR that touches frontend/
+python scripts/check_theme.py --app host --check colors   # narrowed, while sweeping
 ```
+
+`check_theme.py` is a **manual pre-MR gate, not run in CI** (`.gitlab-ci.yml` stays
+unmodified); the MR template's checklist carries it. Once the Tailwind palette is replaced by
+the theme tokens, a leftover raw colour class compiles to no CSS and no error, so this script
+and clicking through the pages in both themes are the only catches. See
+`docs/plans/t9-theming.md` §4.15.
 
 ## Elephant-Goldfish tooling (optional, encouraged)
 
