@@ -21,11 +21,11 @@ function storedPin(code: string, questionId: number): Point | null {
 
 /** Label from geometry, so it matches the map whatever the points were (spec §4.10). */
 function mapPinLabel(reveal: MapPinReveal, pin: Point | null): { text: string; className: string } {
-  if (!pin) return { text: 'No answer', className: 'text-slate-400' };
+  if (!pin) return { text: 'No answer', className: 'text-fg-muted' };
   const d = mapPinDistance(reveal.imageWidth, reveal.imageHeight, reveal.target, pin);
-  if (d <= reveal.fullRadius) return { text: 'Within target', className: 'text-green-400' };
-  if (d < reveal.zeroRadius) return { text: 'Partial credit', className: 'text-amber-400' };
-  return { text: 'Too far', className: 'text-red-400' };
+  if (d <= reveal.fullRadius) return { text: 'Within target', className: 'text-success-fg' };
+  if (d < reveal.zeroRadius) return { text: 'Partial credit', className: 'text-warning-fg' };
+  return { text: 'Too far', className: 'text-danger-fg' };
 }
 
 function MapPinResults({
@@ -44,7 +44,7 @@ function MapPinResults({
       <p className={`text-3xl font-black ${label.className}`}>
         {label.text}
         {reveal.gradingType === 'COMPLETENESS' && (
-          <span className="block text-base font-semibold text-indigo-300 mt-1">
+          <span className="block text-base font-semibold text-accent-fg mt-1">
             · full credit for answering
           </span>
         )}
@@ -58,16 +58,16 @@ function MapPinResults({
           myPin={pin}
         />
       </div>
-      <p className="text-slate-100 text-3xl font-bold">+{results.yourPoints.toLocaleString()} pts</p>
+      <p className="text-fg text-3xl font-bold">+{results.yourPoints.toLocaleString()} pts</p>
       <div className="space-y-1">
-        <p className="text-slate-300 text-lg">
-          Total: <span className="font-bold text-white">{results.yourScore.toLocaleString()}</span> pts
+        <p className="text-fg text-lg">
+          Total: <span className="font-bold text-fg">{results.yourScore.toLocaleString()}</span> pts
         </p>
-        <p className="text-slate-400 text-base">
-          Rank <span className="font-bold text-white">#{results.yourRank}</span> of {results.playerCount}
+        <p className="text-fg-muted text-base">
+          Rank <span className="font-bold text-fg">#{results.yourRank}</span> of {results.playerCount}
         </p>
       </div>
-      <p className="text-slate-500 text-sm mt-2">Waiting for next question…</p>
+      <p className="text-fg-muted text-sm mt-2">Waiting for next question…</p>
     </div>
   );
 }
@@ -100,7 +100,7 @@ export default function ResultsPage() {
     return (
       <div className="min-h-screen flex items-center justify-center pt-16">
         <ThemeToggle className="fixed top-3 right-3 z-40" />
-        <p className="text-slate-400">Loading results…</p>
+        <p className="text-fg-muted">Loading results…</p>
       </div>
     );
   }
@@ -131,43 +131,43 @@ export default function ResultsPage() {
 
       {/* Correct / Wrong / Recorded */}
       {isCompleteness ? (
-        <p className="text-indigo-400 text-4xl font-black">Answer recorded!</p>
+        <p className="text-accent-fg text-4xl font-black">Answer recorded!</p>
       ) : isCorrect ? (
-        <p className="text-green-400 text-4xl font-black">Correct!</p>
+        <p className="text-success-fg text-4xl font-black">Correct!</p>
       ) : (
-        <p className="text-red-400 text-4xl font-black">Incorrect</p>
+        <p className="text-danger-fg text-4xl font-black">Incorrect</p>
       )}
 
       {/* What the player answered */}
       {answeredLabel && (
-        <p className="text-slate-400 text-base">
-          You answered: <span className="text-slate-200 font-semibold">{answeredLabel}</span>
+        <p className="text-fg-muted text-base">
+          You answered: <span className="text-fg font-semibold">{answeredLabel}</span>
         </p>
       )}
 
       {/* Correct answer for FITB ACCURACY */}
       {isFitb && fitbAccepted.length > 0 && (
-        <p className="text-slate-400 text-base">
-          Correct: <span className="text-green-400 font-semibold">{fitbAccepted.join(' / ')}</span>
+        <p className="text-fg-muted text-base">
+          Correct: <span className="text-success-fg font-semibold">{fitbAccepted.join(' / ')}</span>
         </p>
       )}
 
       {/* Points for this question */}
-      <p className="text-slate-100 text-3xl font-bold">
+      <p className="text-fg text-3xl font-bold">
         +{yourPoints.toLocaleString()} pts
       </p>
 
       {/* Running total and rank */}
       <div className="mt-2 space-y-1">
-        <p className="text-slate-300 text-lg">
-          Total: <span className="font-bold text-white">{yourScore.toLocaleString()}</span> pts
+        <p className="text-fg text-lg">
+          Total: <span className="font-bold text-fg">{yourScore.toLocaleString()}</span> pts
         </p>
-        <p className="text-slate-400 text-base">
-          Rank <span className="font-bold text-white">#{yourRank}</span> of {playerCount}
+        <p className="text-fg-muted text-base">
+          Rank <span className="font-bold text-fg">#{yourRank}</span> of {playerCount}
         </p>
       </div>
 
-      <p className="text-slate-500 text-sm mt-4">Waiting for next question…</p>
+      <p className="text-fg-muted text-sm mt-4">Waiting for next question…</p>
     </div>
   );
 }
