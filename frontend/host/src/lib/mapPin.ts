@@ -97,6 +97,46 @@ export function mapPinFraction(d: number, fullRadius: number, zeroRadius: number
 }
 
 // ---------------------------------------------------------------------------
+// Colours (T9 spec §4.13): the invariant --map-* tokens in theme.css
+// ---------------------------------------------------------------------------
+
+export type MapColorName =
+  | 'full'
+  | 'full-fill'
+  | 'zero'
+  | 'pin'
+  | 'pin-disabled'
+  | 'heat'
+  | 'outline';
+
+const mapChannels = new Map<MapColorName, string>();
+const missingReported = new Set<MapColorName>();
+
+/**
+ * A map-overlay colour, `rgb(R G B / alpha)`, from the `--map-<name>` token. The tokens are
+ * the same in both themes (overlays sit on the map image, not the page), so each value is
+ * read once and cached; the heatmap draws many dots. An empty value means theme.css wasn't
+ * imported: log once per name, return 'transparent' and don't cache, so the next call retries.
+ */
+export function mapColor(name: MapColorName, alpha = 1): string {
+  let channels = mapChannels.get(name);
+  if (channels === undefined) {
+    channels = getComputedStyle(document.documentElement)
+      .getPropertyValue(`--map-${name}`)
+      .trim();
+    if (!channels) {
+      if (!missingReported.has(name)) {
+        missingReported.add(name);
+        console.error(`mapColor: --map-${name} is not defined (is theme.css imported?)`);
+      }
+      return 'transparent';
+    }
+    mapChannels.set(name, channels);
+  }
+  return `rgb(${channels} / ${alpha})`;
+}
+
+// ---------------------------------------------------------------------------
 // Drawing (coordinates in CSS pixels; the caller has scaled for devicePixelRatio)
 // ---------------------------------------------------------------------------
 
@@ -114,34 +154,34 @@ export function drawTarget(
   ctx.arc(c.x, c.y, zeroRadius * fit.drawW, 0, Math.PI * 2);
   ctx.setLineDash([6, 5]);
   ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(234, 179, 8, 0.95)';
+  ctx.strokeStyle = mapColor('zero', 0.95);
   ctx.stroke();
   ctx.setLineDash([]);
 
   ctx.beginPath();
   ctx.arc(c.x, c.y, fullRadius * fit.drawW, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(34, 197, 94, 0.25)';
+  ctx.fillStyle = mapColor('full-fill', 0.25);
   ctx.fill();
   ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(22, 163, 74, 1)';
+  ctx.strokeStyle = mapColor('full');
   ctx.stroke();
 
   ctx.beginPath();
   ctx.arc(c.x, c.y, 4, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(22, 163, 74, 1)';
+  ctx.fillStyle = mapColor('full');
   ctx.fill();
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'white';
+  ctx.strokeStyle = mapColor('outline');
   ctx.stroke();
   ctx.restore();
 }
 
-/** A map marker whose tip sits exactly at `p`. */
+/** A map marker whose tip sits exactly at `p`. `color` defaults to the map-pin token. */
 export function drawPin(
   ctx: CanvasRenderingContext2D,
   fit: DrawRect,
   p: Point,
-  color = 'rgb(220, 38, 38)',
+  color?: string,
 ): void {
   const { x, y } = fractionToCanvas(p, fit);
   const r = 9;
@@ -152,14 +192,14 @@ export function drawPin(
   ctx.lineTo(x - r * 0.8, head + r * 0.6);
   ctx.arc(x, head, r, Math.PI * 0.8, Math.PI * 0.2);
   ctx.closePath();
-  ctx.fillStyle = color;
+  ctx.fillStyle = color ?? mapColor('pin');
   ctx.fill();
   ctx.lineWidth = 2;
-  ctx.strokeStyle = 'white';
+  ctx.strokeStyle = mapColor('outline');
   ctx.stroke();
   ctx.beginPath();
   ctx.arc(x, head, r * 0.35, 0, Math.PI * 2);
-  ctx.fillStyle = 'white';
+  ctx.fillStyle = mapColor('outline');
   ctx.fill();
   ctx.restore();
 }
