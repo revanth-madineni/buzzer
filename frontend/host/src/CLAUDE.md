@@ -6,8 +6,8 @@ projector. They sign in, pick a course + game to create a room (or rejoin/delete
 active sessions), show the QR code and room code, and drive the game (start, lock/unlock,
 show results, next question) through to an anonymous score histogram and per-question
 breakdown. The host is the only client that advances the game. Course HOSTs also get a
-management area (T4) for each course: games and questions, the roster, and completed-session
-downloads.
+management area (T4) for each course: games and questions, the roster, (T8) the course's
+uploaded images, and completed-session downloads.
 
 ## Contents
 Top-level files:
@@ -16,9 +16,9 @@ Top-level files:
 - `App.tsx` — `react-router` routes under basename `import.meta.env.BASE_URL` (`/host/` in
   production, `/` in dev): `/login`, `/home`, `/game/:code/{lobby,question,results,gameover}`
   nested under `GameLayout`, and `/courses/:courseId/{games,games/:gameId/questions,roster,
-  sessions}` nested under `HostLayout` (defined in `App.tsx`). `HostLayout` has a course picker
-  from `my-courses`; switching course keeps the section. It also has Games / Roster / Sessions
-  links, "Play" (→ `/home`), the theme toggle and Sign out. Everything except `/login` sits
+  images,sessions}` nested under `HostLayout` (defined in `App.tsx`; `images` is T8). `HostLayout`
+  has a course picker from `my-courses`; switching course keeps the section (`SECTIONS`
+  includes `images`). It also has Games / Roster / Images / Sessions links, "Play" (→ `/home`), the theme toggle and Sign out. Everything except `/login` sits
   behind `RequireAuth`, which only checks that `localStorage.token` is **present**. Anything
   else redirects to `/login`.
 - `theme.css` (T9) — the colour tokens as RGB-channel CSS variables (`--surface: 30 41 59`):
@@ -34,15 +34,17 @@ Top-level files:
   sets `data-theme` before first paint. The script must agree with `lib/theme.ts`.
 - `types/game.ts` — TypeScript shapes for socket payloads (`SyncStatePayload`,
   `QuestionPayload` incl. `gradingType`/`editDistance`/`startedAt`, `HostResultsPayload`,
-  `AnswerReveal`, `HostGameOverPayload`, `HostQuestionSummaryItem`, …) and `HostPhase`. It has
-  no context file of its own.
+  `AnswerReveal`, `HostGameOverPayload`, `HostQuestionSummaryItem`, …) and `HostPhase`. T8
+  added `QuestionConfig.promptImageId` / `optionImageIds` (parallel to `options`, `null` = text
+  option), `ImageAltMap` (image ID → alt text), and `imageAlt` on `QuestionPayload` and
+  `HostQuestionSummaryItem`. It has no context file of its own.
 
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
-| `lib/` | `api.ts` REST wrapper (`get`/`post`/`put`/`patch`/`delete`, `postForm`, `download`; Bearer token from `localStorage.token`; shows the server's error `message`), `cn()`, (T7) `mapPin.ts` + `images.ts`, and (T9) the theme store `theme.ts`. No role logic. |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the display-only `TimerBar` (supports a mid-question `initialSeconds`), (T7) `MapCanvas` + `MapPinHeatmap`, and (T9) `ThemeToggle`. |
-| `pages/` | `LoginPage`, `HomePage` (course → that course's games, "Manage this course", active sessions), `game/*`, and `manage/*` (Games, QuestionEditor, Roster, Sessions). `game/GameLayout.tsx` owns the socket and shares state via `useGame()`. |
+| `lib/` | `api.ts` REST wrapper (`get`/`post`/`put`/`patch`/`delete`, `postForm`, `download`; Bearer token from `localStorage.token`; shows the server's error `message`), `cn()`, (T7) `mapPin.ts` + `images.ts` (authenticated image loading, used for maps and, since T8, every uploaded image), and (T9) the theme store `theme.ts`. No role logic. |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the display-only `TimerBar` (supports a mid-question `initialSeconds`), (T7) `MapCanvas` + `MapPinHeatmap`, (T8) `AuthImage` + `ImagePicker`, and (T9) `ThemeToggle`. |
+| `pages/` | `LoginPage`, `HomePage` (course → that course's games, "Manage this course", active sessions), `game/*`, and `manage/*` (Games, QuestionEditor, Roster, Images, Sessions). `game/GameLayout.tsx` owns the socket and shares state via `useGame()`. |
 
 ## How it fits together
 Dependency direction: `pages/` → `components/` + `lib/` + `types/`. There's no global store.
@@ -87,8 +89,9 @@ subdirectories.
 4. **Lobby.** `LobbyPage` shows the QR (`{origin}/player/join?code=…`), room code, and live
    player count (`player_joined` / `player_left`), plus the auto-advance toggle. "Start Game"
    emits `host_advance`.
-5. **Question.** `new_question` → `QuestionPage`: header, `TimerBar`, prompt, and an
-   `answered / players` count (`answer_status`). "Lock/Unlock" emits `host_lock_question`,
+5. **Question.** `new_question` → `QuestionPage`: header, `TimerBar`, prompt, (T8) the prompt
+   image if any (projector only; phones never show it), and an `answered / players` count
+   (`answer_status`). "Lock/Unlock" emits `host_lock_question`,
    which pauses the server timer. `answer_phase_ended` arrives on timeout or when everyone has
    answered.
 6. **Results.** "Show Results" (`host_advance`) → `question_results` → `ResultsPage`: bar chart,
@@ -107,9 +110,10 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
   origin. A guest join in the player app on the same browser replaces the host's login, and
   logging out anywhere logs out everywhere (`lib/CLAUDE.md`).
 - **No token refresh, except for images.** The 2 h access token is renewed only when
-  `lib/images.ts` gets a 401 loading a map; `RequireAuth` still admits an expired token.
-- **Map pin is untested in a browser.** No test runner; the heatmap and editor canvas were only
-  type-checked and built. Check them by hand.
+  `lib/images.ts` gets a 401 loading an image; `RequireAuth` still admits an expired token.
+- **Map pin and T8 images are untested in a browser.** No test runner; the heatmap and editor
+  canvas were only type-checked and built, and the T8 image UI (prompt image, thumbnails,
+  editor fields, `ImagesPage`) has never been clicked through. Check them by hand.
 - **Reconnect gaps.** In the RESULTS phase the chart is empty (results aren't in `sync_state`).
   A COMPLETED game strands the host on an empty lobby. `TimerBar` resume and reconnect math
   use the client clock and frozen client values, so the bar can drift from the server's timer
@@ -118,9 +122,11 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
   `answer_phase_ended` never fires) and resets to off on reload.
 - **The QR/join URL only works behind nginx.** Under `npm run dev:host` it points at the host
   app itself.
-- **Duplicated code across apps.** `lib/api.ts`, `components/ui/*` and
-  `pages/manage/QuestionEditorPage.tsx` (from the admin app) are copies, not shared.
-  `ui/*` is byte-identical to the admin app's and tuned differently from the player's. Question
+- **Duplicated code across apps.** `lib/api.ts`, `components/ui/*`, (T8)
+  `components/ImagePicker.tsx`, and `pages/manage/QuestionEditorPage.tsx` and
+  `pages/manage/ImagesPage.tsx` (both from the admin app) are copies, not shared.
+  `ui/*` and `ImagePicker` are byte-identical to the admin app's, and `ui/*` is tuned
+  differently from the player's. Question
   type labels and answer-reveal rendering are duplicated across three pages here, and the word
   cloud re-implements Levenshtein client-side, so it can disagree with server grading.
 - **`types/game.ts` is hand-maintained**, not generated from the backend. It omits fields the

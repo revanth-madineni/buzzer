@@ -4,10 +4,11 @@
 The three browser clients for Buzzer, each a separate React 18 + Vite 5 + Tailwind 3 +
 TypeScript single-page app:
 - **`host/`**: the instructor's projector screen, which creates and drives a game, plus a
-  per-course management area (games, questions, roster, session results) for course HOSTs.
+  per-course management area (games, questions, roster, images, session results) for course
+  HOSTs.
 - **`player/`**: students' phones, to join a room and answer.
 - **`admin/`**: the staff desktop console for courses, rosters, users, games, questions,
-  access grants, and session exports.
+  images, access grants, and session exports.
 
 They share no code. Each talks to the same FastAPI backend (`backend/app/CLAUDE.md`) over
 `/api` REST, and host + player also over Socket.IO.
@@ -89,8 +90,8 @@ enforces either; every check is server-side (`backend/app/common/CLAUDE.md`,
 
 | app | writes | reads (via backend checks) |
 |---|---|---|
-| admin | global role (USER↔ADMIN), course HOST/PLAYER grants, game grants, `restricted`, game ↔ course assignment, `allow_guests`, course rosters | — (everything is `require_admin`) |
-| host | game sessions (`POST /game/rooms`); for courses they HOST: games, questions, roster uploads | HOST on the **game's** course (+ a grant if the game is restricted) to run or edit it (ADMIN bypasses). Session results: HOST on the session's course. Rejoin/delete/drive a live session: ownership (`host_user_id`) or ADMIN. |
+| admin | global role (USER↔ADMIN), course HOST/PLAYER grants, game grants, `restricted`, game ↔ course assignment, `allow_guests`, course rosters, images (T8) | — (everything is `require_admin`) |
+| host | game sessions (`POST /game/rooms`); for courses they HOST: games, questions, roster uploads, images (T8) | HOST on the **game's** course (+ a grant if the game is restricted) to run or edit it (ADMIN bypasses). Session results: HOST on the session's course. Rejoin/delete/drive a live session: ownership (`host_user_id`) or ADMIN. |
 | player | GUEST users (`/auth/guest`), scores (via socket) | active roster row **or** course PLAYER/HOST grant to join (ADMIN and GUEST join any room) |
 
 **Games belong to a course** (T4). Every HOST of course C can create, edit and run C's games.
@@ -101,7 +102,9 @@ them HOST on C (admin app → Access).
 ### One game, end to end
 1. **Admin setup:** course and the instructor's HOST grant (admin Access page). The instructor
    can then upload the roster and create games + questions in the host app's management area,
-   or the admin does it in the admin app.
+   or the admin does it in the admin app. Images (T8, `docs/plans/t8-images.md`) are uploaded
+   per course (or unassigned, admin only), with alt text, from the editors' picker or the
+   Images page in either app.
 2. **Host creates a room:** sign in (NetID SSO or local account), pick course + game, get a
    6-char code and a QR pointing to `/player/join?code=…`.
 3. **Players join:** ping the code, get a token (guest, NetID, or local account), socket
@@ -127,7 +130,8 @@ Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
   `{error, message}`. The host and admin `lib/api.ts` read `message`, then a string `detail`,
   then "Invalid input" for validation arrays (T4). The player wrapper still reads only `detail`.
 - **Almost no token refresh.** The 2 h access token is renewed only by `lib/images.ts` (T7),
-  which calls `/api/auth/refresh` once when a map image load gets a 401. `api.ts` in every app
+  which calls `/api/auth/refresh` once when an image load (a map, or since T8 any
+  `AuthImage`) gets a 401. `api.ts` in every app
   still has no refresh or 401 retry.
 - **Copy-pasted code instead of a shared package.** `lib/api.ts`, `lib/utils.ts`, and
   `components/ui/*` are duplicated. Host ≡ admin byte-for-byte (including `api.ts` since T4);
@@ -138,19 +142,31 @@ Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
   `scripts/check_theme.py` checks it (one md5 per group). Edit one copy, then copy it to the
   others:
   - in all three apps: `tailwind.config.ts`, `lib/theme.ts`, `components/ThemeToggle.tsx`
-    (T9) and `lib/mapPin.ts`, `lib/images.ts`, `components/MapCanvas.tsx` (T7);
+    (T9), `lib/mapPin.ts`, `lib/images.ts`, `components/MapCanvas.tsx` (T7) and
+    `components/AuthImage.tsx` (T8: an uploaded image by ID, `object-contain`, with loading
+    and error placeholders);
   - in player and admin: `src/theme.css` (the host's is the same text plus the stage blocks);
-  - in host and admin: `components/ui/{button,card,input}.tsx`.
+  - in host and admin: `components/ui/{button,card,input}.tsx` and `components/ImagePicker.tsx`
+    (T8: list/upload course images with alt text; the caller passes the per-app endpoints, and
+    it exports the shared image types and alt-text helpers).
 - **Two question editors.** The host `pages/manage/QuestionEditorPage.tsx` is an adapted copy of
-  the admin one (host endpoints, no JSON export). A form change must be made in both.
+  the admin one (host endpoints, no JSON export). A form change must be made in both. Since T8
+  both support a prompt image on every type and image options on multiple_choice /
+  multi_select (`config.optionImageIds` parallel to `options`). The host copy lists and uploads
+  images under the **game's** `course_id`, not the `:courseId` route param. The host
+  `pages/manage/ImagesPage.tsx` is likewise an adapted copy of the admin `ImagesPage` (one
+  course, no course filter).
 - **Adding a question type** touches both `QuestionEditorPage`s (form + `answer_data` keys,
   which mix `answer_points` with fill-in-the-blank's camelCase), the host `QuestionPage` /
   `ResultsPage` / `GameOverPage`, the player `QuestionPage` / `ResultsPage` / `GameOverPage`,
   both `types/game.ts`, and the backend scoring and reveal code. map_pin (T7) is the worked
-  example: see `docs/plans/t7-map-pin.md`.
+  example: see `docs/plans/t7-map-pin.md`. T8's prompt and option images touched the same set
+  of files without a new type (`docs/plans/t8-images.md`).
 - **No frontend test runner.** None of the three apps can run tests, so the map-pin canvas,
   pointer handling, image loading and the player's non-fatal late-answer handling were only
-  type-checked and built. Verify them by hand on a phone and a projector.
+  type-checked and built. The T8 image UI (editors' image fields, `ImagePicker`, both Images
+  pages, the player's image-option grid, the host's prompt image and all the thumbnails) has
+  never been run in a browser. Verify them by hand on a phone and a projector.
 - **Stale config build output (fixed in T9).** `tsconfig.node.json` is composite and includes
   `vite.config.ts` and `tailwind.config.ts`. Before T9, `tsc -b` (in `npm run build`) emitted
   `vite.config.js` and `tailwind.config.js` beside them. Vite and Tailwind load the `.js`

@@ -17,14 +17,19 @@ from the ORM classes in `models/` — response schemas use `from_attributes=True
     (`GameFields` + optional `course_id`), `GameUpdate` (can set `restricted`, but **not**
     `course_id`), `GameResponse` (+ `course_id: int | None`, `restricted`); `max_players` 1–500,
     default 150. Moving a game between courses has its own shapes: `GameMoveRequest`
-    (`course_id: int`, `confirm`) and `GameMoveResult` (`applied`, `game`, `dropped_grants`).
+    (`course_id: int`, `confirm`) and `GameMoveResult` (`applied`, `game`, `dropped_grants`,
+    `images_moved`, `images_copied`; T8).
   - Questions: `QuestionCreate` (with a `model_validator` enforcing per-type structure),
-    `QuestionUpdate`, `QuestionResponse` (**includes `answer_data` and `grading_type`**),
+    `QuestionUpdate`, `QuestionResponse` (**includes `answer_data` and `grading_type`**; T8
+    adds `image_alt` `{id: alt_text}`, filled by `question_service.question_responses`),
     `QuestionReorder` (`order` = full list of question IDs in the new order).
     `QUESTION_TYPE_PATTERN` is shared by create and update, and `is_valid_number` (int or
     float, not `bool`, finite) is also used by `services/game_service`'s map-pin helpers.
-  - Images (T7): `ImageResponse` (`id`, `mime_type`, `width`, `height`, `byte_size`,
-    `sha256`; never the bytes). Used by both upload endpoints.
+  - Images (T7, T8): `ImageResponse` (`id`, `mime_type`, `width`, `height`, `byte_size`,
+    `sha256`, `alt_text`, `course_id`, `created_at`; never the bytes), `ImageUsage` (one use:
+    game, question, 1-based `question_number` = position, `role` `map | prompt | option`;
+    one entry per question **and** role), `ImageListItem` (+ `usage`, `hidden_usage_count`),
+    `ImageAltUpdate` (`alt_text` ≤ 250, stripped). `ALT_TEXT_MAX = 250`.
   - Users: `UserCreate` (local account; username lowercased, `^[a-zA-Z0-9_-]+$`, password 8–72
     chars), `UserUpdate` (can set `role` to `USER | ADMIN`), `UserResponse`.
   - Access grants: `CourseAccessGrant` (`course_id` + role `HOST | PLAYER`), `GameAccessGrant`
@@ -71,9 +76,19 @@ that the two must match (T4 spec §4.4) is enforced in `services/`, not here.
 | map_pin (T7) | exactly `imageId` (non-empty string ≤ 64; not required to be a UUID, so hand-made bundles can use `"map1"`) + optional `imageWidth`/`imageHeight` (positive ints, overwritten by the server) | **both grading types**: exactly `targets` (list of exactly 1 `{x, y}`, valid numbers in [0, 1]), `fullRadius` (≥ 0.02), `zeroRadius` (> fullRadius, ≤ 2). Radii are in image-width units. Unknown keys rejected everywhere. |
 
 Other `COMPLETENESS` questions have no `answer_data` requirements. map_pin needs the target
-under COMPLETENESS too, because both grading types show the same map reveal. Whether the
-image exists is checked in `services/question_service.resolve_map_pin_image` (422
-`IMAGE_NOT_FOUND`), not here.
+under COMPLETENESS too, because both grading types show the same map reveal.
+
+**Image keys (T8, `_validate_question_images`):**
+- `promptImageId` — optional on **every** type (map_pin's allowed key set includes it); a
+  non-empty string ≤ 64 (`null` not allowed; omit the key to remove the image).
+- `optionImageIds` — `multiple_choice` and `multi_select` only: a list the same length as
+  `options`, each entry `null` or an image ref; the same ID may repeat. If **any** entry is an
+  ID, each option is either an image (`options[i] == ""`) or non-blank text, never both or
+  neither. Absent or all-`null` → the old option rules, unchanged.
+
+Whether images exist, and course scoping, are checked in
+`services/question_service.resolve_question_images` (422 `IMAGE_NOT_FOUND` /
+`IMAGE_NOT_IN_COURSE`), not here.
 
 ## Gotchas
 - **`QuestionUpdate` is validated on the merged result (T7).** `QuestionUpdate` itself only

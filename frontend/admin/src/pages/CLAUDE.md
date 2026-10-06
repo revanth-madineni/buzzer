@@ -2,7 +2,7 @@
 
 ## Purpose
 Route components for the admin (desktop) app: CRUD for courses, rosters, local users, guests,
-games and questions; granting per-user course and game access; and browsing, exporting, and
+games, questions and (T8) uploaded images; granting per-user course and game access; and browsing, exporting, and
 deleting game sessions. Plain REST only; no socket, no live game view. Every page is a
 self-contained `useState` + `load()` component with no shared store.
 
@@ -10,7 +10,7 @@ self-contained `useState` + `load()` component with no shared store.
 Routes are defined in `../App.tsx` (basename `/admin/` in production). Everything except
 `/login` sits inside `RequireAdmin` (token-present check only) and `AdminLayout`, whose
 sidebar has two sections: **Admin** (Users, Courses, Access) and **Host tools** (Games,
-Sessions, Guests), plus Logout. Unknown paths → `/users`.
+Images, Sessions, Guests), plus Logout. Unknown paths → `/users`.
 - `LoginPage.tsx` — `/login`: username + password → `POST /auth/login` → `/users`. No NetID
   SSO and no role check. Renders the theme toggle fixed top-right.
 - `CoursesPage.tsx` — `/courses`: list, create, and rename courses (name + semester). It also
@@ -55,7 +55,8 @@ Sessions, Guests), plus Logout. Unknown paths → `/users`.
   - The list shows each game's course, a **Restricted** badge, and **Unassigned** for games with
     no course.
   - "Move / assign to course" opens `MoveGamePanel`: it calls `POST /admin/games/{id}/move`
-    with `confirm=false`, shows "These users will lose access: …", then calls with
+    with `confirm=false`, shows "These users will lose access: …" (and, since T8, how many
+    images will move to the course and how many shared ones will be copied), then calls with
     `confirm=true`.
 - `QuestionEditorPage.tsx` — `/games/:gameId/questions`: ordered question list with up/down
   reorder (`POST .../reorder` with the full id order), inline add/edit via `QuestionForm`,
@@ -63,7 +64,8 @@ Sessions, Guests), plus Logout. Unknown paths → `/users`.
   **derives `points_value`**: max option points (MC, FIB), max of T/F, sum of positive options
   (multi-select), or the entered value for COMPLETENESS and for map pin.
   - Map pin (T7, "Map pin (tap on image)"): upload to `POST /admin/images` (with the game's
-    `course_id` if it has one; the server's error message is shown), then click/drag on
+    `course_id` if it has one and an empty alt text; the server's error message is shown) or,
+    since T8, "Choose from images" (`ImagePicker`), then click/drag on
     `MapCanvas` to set the target; each radius has a number input (source of truth, 0.02–2,
     step 0.005) paired with a 0.02–0.5 slider that shows `min(value, 0.5)`, so imported values
     above 0.5 are kept. `mapPinFormError` blocks saving without an image or target, or with
@@ -71,6 +73,25 @@ Sessions, Guests), plus Logout. Unknown paths → `/users`.
     warns. `config = {imageId}` (the server fills in dimensions); `answer_data = {targets:
     [{x, y}], fullRadius, zeroRadius}`. List line: "Map pin — target (0.42, 0.37), r 0.04 →
     0.15". "Replace image" uploads a new image and keeps the target fractions.
+  - Images (T8, spec `docs/plans/t8-images.md` §4.13): every type gets an optional **prompt
+    image** (`PromptImageField`, saved as `config.promptImageId`; shown on the projector only).
+    `multiple_choice` / `multi_select` options can each be text **or** an image (`OptionList`,
+    "Image" button per row): `McOption.imageId`, sent as `config.optionImageIds` parallel to
+    `config.options`, with `""` as the text of an image option; `optionImageIds` is omitted when
+    no option has an image. `optionImagesFormError` blocks saving only when some option has an
+    image and another has neither text nor image. Images are chosen or uploaded (with alt
+    text) through `components/ImagePicker`, listing `GET /admin/images?course_id=` for the
+    game's course (or `?unassigned=true` for a courseless game). Thumbnails and alt text come
+    from `QuestionResponse.image_alt` (display only, never sent); an empty alt shows a warning.
+    The list shows "N image options" / "prompt image" badges and option thumbnails.
+- `ImagesPage.tsx` — `/images` (T8): every uploaded image, filtered by a course select (All
+  courses, one course → `?course_id=`, Unassigned → `?unassigned=true`). Upload (file + alt
+  text) goes to the course being shown, or unassigned while showing All/Unassigned. Each card:
+  thumbnail (click → full-size overlay, Escape closes), course badge, size and date, alt text
+  with inline edit (`PATCH /admin/images/{id}`), **Used by** (links to each using game's
+  question editor), **Replace** (`POST .../replace`, with an "updates N question(s) in M
+  game(s)" confirm and optional new alt text) and **Delete** (disabled while in use; a 409
+  `IMAGE_IN_USE` from a race reloads the list and shows the message).
 - `SessionsPage.tsx` — `/sessions`: all sessions with status filter tabs (course, game, host,
   player count, dates). Per session: HTML report download, delete (two-step confirm), and an
   expandable export panel. Canvas CSV has a column title + optional assignment ID (appended to
@@ -165,16 +186,19 @@ Two separate role systems (see `backend/app/models/CLAUDE.md`):
   made valid (see `schemas/CLAUDE.md`).
 - **`points_value` can disagree with the saved options.** Multi-select and fill-in-the-blank
   drop blank-text options/answers from the payload, but `points_value` is computed over **all**
-  of them, blanks included. MC doesn't drop blank options at all.
+  of them, blanks included. Multi-select keeps an option with an image even though its text is
+  blank (T8). MC doesn't drop blank options at all; with any image option a blank text option
+  is a form error instead.
 - **Answer data key naming is inconsistent by type.** MC/TF/multi-select use `answer_points`
   (snake_case); fill-in-the-blank uses `acceptedAnswers` / `answerPoints` / `editDistance`
   (camelCase). These must match `services/game_service.calculate_score` and the host app's
   reveal rendering. A new question type touches `FormState`, `defaultForm`,
   `questionToForm`, `formToPayload`, the `QuestionForm` UI, and the list rendering here, plus
   the backend and both game frontends. map_pin uses camelCase (`targets`, `fullRadius`,
-  `zeroRadius`, `imageId`).
-- **The map-pin editor canvas is untested.** No test runner; it was only type-checked and
-  built. Check target placement and the radius circles by hand after changing it.
+  `zeroRadius`, `imageId`), as do T8's `promptImageId` / `optionImageIds`.
+- **The map-pin editor canvas and the T8 image UI are untested.** No test runner; the canvas
+  was only type-checked and built, and the T8 image UI has never been run in a browser. Check target placement, the radius
+  circles, the image picker, option images and `ImagesPage` by hand after changing them.
 - **`max_players` is editable but never enforced** by the server (see `websocket/CLAUDE.md`).
 - **Literal escape sequences render on screen.** `Loading…` in JSX text (not inside
   `{'…'}`) shows the backslash sequence verbatim. This happens in `UsersPage`, `GuestsPage`,

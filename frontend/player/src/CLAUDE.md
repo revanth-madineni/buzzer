@@ -3,8 +3,9 @@
 ## Purpose
 The player app: a React + Vite + Tailwind single-page app that students open on their phones
 to join a room by code, sign in (guest, UW NetID, or local account), and answer questions in
-real time. It shows answer controls and personal feedback only. The question prompt,
-leaderboard, and answer distributions are on the host's big screen.
+real time. It shows answer controls and personal feedback only. The question prompt (and,
+since T8, its prompt image), leaderboard, and answer distributions are on the host's big
+screen.
 
 ## Contents
 Top-level files:
@@ -30,13 +31,16 @@ Top-level files:
   `QuestionPayload`, `AnswerResultPayload`, `PlayerResultsPayload`, `PlayerAnswerReveal`,
   `PlayerGameOverPayload`, …) and `PlayerPhase`. T7 added `QuestionType` incl. `map_pin`,
   `MapPinConfig`, `MapPinAnswer`, `MapPinReveal`, `GameImagesPayload`, `ErrorPayload` (with
-  `code`), and `SyncStatePayload.imageIds`. It has no context file of its own.
+  `code`), and `SyncStatePayload.imageIds`. T8 added `QuestionConfig.promptImageId` /
+  `optionImageIds` (parallel to `options`, `null` = text option), `ImageAltMap` (image ID →
+  alt text), and `imageAlt` on `QuestionPayload` and `QuestionSummaryItem`. It has no context
+  file of its own.
 
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
 | `lib/` | `api.ts` REST wrapper (Bearer token from `localStorage.token`), `cn()`, `isTokenExpired()`, `mapPin.ts` (map geometry, `mapColor`), `images.ts` (authenticated image loading with a one-shot refresh), `theme.ts` (the theme store). |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the client-side `TimerBar`, the map-pin canvas (`MapCanvas`, `MapPinCanvas`), and `ThemeToggle`. |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the client-side `TimerBar`, the map-pin canvas (`MapCanvas`, `MapPinCanvas`), `AuthImage` (T8, an uploaded image by ID), and `ThemeToggle`. |
 | `pages/` | Route components. `game/GameLayout.tsx` owns the socket and shares game state via `useGame()`. |
 
 ## How it fits together
@@ -68,7 +72,8 @@ same-origin paths. The server side of every call below is described in
    every `connect` it emits `join_room {room_code, role: "PLAYER"}`. The server replies
    `sync_state`; `LOBBY` goes to `LobbyPage`, and the player count updates via `player_joined`.
 4. **Question.** `new_question` stores `currentQuestion`, resets per-question state, and goes to
-   `QuestionPage`. That page renders controls by `type` and a `TimerBar` keyed by `questionId`.
+   `QuestionPage`. That page renders controls by `type` and a `TimerBar` keyed by `questionId`;
+   MC / multi-select with image options (T8) become a 2-column grid of image buttons.
 5. **Answer.** Tapping calls `emitAnswer` → `submit_answer {question_id, answer_data,
    answer_time_ms}`. `answer_received` goes to `FeedbackPage`, which deliberately doesn't
    show whether the answer was right.
@@ -81,8 +86,9 @@ same-origin paths. The server side of every call below is described in
    **disconnected**. "Play Again" clears the token and goes to `/join`. `game_abandoned` goes
    straight to `/join`, and `host_disconnected` shows a banner.
 
-Map images are preloaded from `sync_state.imageIds` and `game_images` before the first map
-question, so the map is usually cached by the time it's needed.
+Map images, and since T8 option images (never prompt images), are preloaded from
+`sync_state.imageIds` and `game_images` before the first question that needs them, so they
+are usually cached by the time they're shown.
 
 Answer payloads (`{selectedIndex}`, `{selectedValue: boolean}`, `{text}`,
 `{selectedIndices: number[]}`, `{x, y}`) match the keys `backend/app/services/game_service.calculate_score`
@@ -101,7 +107,8 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
   renews the 2 h access token, so a socket reconnect after expiry is rejected unless an image
   load happened to refresh it (`lib/CLAUDE.md`).
 - **No test runner.** The map-pin canvas, pointer handling and the late-answer banner were
-  only type-checked and built, never exercised automatically. Check them by hand on a phone.
+  only type-checked and built, never exercised automatically, and the T8 image options and
+  thumbnails have never been run in a browser. Check them by hand on a phone.
 - **Refresh/reconnect can strand the player.** State is only in React, and `sync_state` for an
   in-progress game doesn't navigate or restore the question or results. The server re-sends
   only an open, unlocked, unanswered question.

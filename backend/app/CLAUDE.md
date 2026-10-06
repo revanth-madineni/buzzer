@@ -19,8 +19,8 @@ Top-level files:
   handler returns **and after the response is sent**, rolls back on exception).
 - `redis_client.py` — Lazy process-wide `get_redis()` (`decode_responses=True`) and
   `close_redis()`.
-- `migrations/` — Alembic (versions 001–005; 005 adds `images`, T7). Not covered by a context
-  file.
+- `migrations/` — Alembic (versions 001–006; 005 adds `images`, T7; 006 adds
+  `images.alt_text`, T8). Not covered by a context file.
 
 Subdirectories (each has its own `CLAUDE.md`, so read it before working there):
 | dir | role |
@@ -28,8 +28,8 @@ Subdirectories (each has its own `CLAUDE.md`, so read it before working there):
 | `models/` | SQLAlchemy tables. A game belongs to at most one course (`Game.course_id`, nullable); each `GameSession` keeps the course it was played in, which can differ. |
 | `schemas/` | Pydantic request/response shapes and per-question-type structure validation. |
 | `common/` | Auth dependencies (global role only), exception types, logging, rate limiter, request body size limit. |
-| `services/` | Business logic: access checks, room lifecycle, scoring (incl. map pin, T7), Redis state, roster, images, exports. |
-| `routers/` | REST endpoints: `auth`, `admin` (all admin-only), `game` (host-facing), `host` (course-host management, T4), `images` (read an image by ID, any logged-in user, T7), `health`. |
+| `services/` | Business logic: access checks, room lifecycle, scoring (incl. map pin, T7), Redis state, roster, images (incl. T8 usage/delete/replace/move), exports. |
+| `routers/` | REST endpoints: `auth`, `admin` (all admin-only), `game` (host-facing), `host` (course-host management, T4), `images` (read an image by ID, any logged-in user, T7), `health`. Image management (list, alt text, delete, replace; T8) lives in `admin` and `host`. |
 | `websocket/` | Socket.IO gateway: join/rejoin, phase state machine, answers, timers, disconnects. |
 
 ## How it fits together
@@ -56,7 +56,7 @@ own queries. Older endpoints still use layer 3 (ownership) only. Full tables are
 ### Where state lives
 | store | holds | lifetime |
 |---|---|---|
-| MySQL (`models/`) | users, courses, rosters, games, questions, `GameSession`, `SessionScore` (one row per answer), `images` (immutable bytes, T7) | durable; the source of truth for scores and leaderboards |
+| MySQL (`models/`) | users, courses, rosters, games, questions, `GameSession`, `SessionScore` (one row per answer), `images` (immutable bytes, T7; editable `alt_text` and `course_id`, T8) | durable; the source of truth for scores and leaderboards |
 | Redis `room:{code}` | status, `question_phase`, `question_index`, `question_ids`, lock/timer fields, `host_sid` | 90-min TTL, refreshed on socket activity |
 | Redis `session:{id}:*` | players (name, running score, connected), current question + `started_at`, answered sets, answer distributions | **no TTL** (see `services/CLAUDE.md`) |
 | gateway process memory | `_sid_ctx` (sid → user/role/room), question timer tasks, host-abandon tasks | per process; lost on restart |
@@ -142,6 +142,12 @@ Most important cross-cutting issues. Details and more are in each subdirectory's
   before returning, and new ones must (`docs/commit-race.md`). The socket gateway's `_db()`
   has the same shape: commit before emitting about a write (`submit_answer` does;
   `websocket/CLAUDE.md`).
-- **Error shape varies.** Clients see `{"error","message"}` from `BuzzerError`,
+- **Images are referenced from question `config` JSON, not by FK** (T7/T8). Which keys hold
+  images is known only to `game_service.question_image_ids`; everything that needs a
+  question's images (export/import, preload, in-use scan, replace, move, report) goes through
+  it. Lock order for image writes: game rows → image rows → question rows
+  (`services/CLAUDE.md`).
+- **Error shape varies.** Clients see `{"error","message"}` from `BuzzerError` (plus extra
+  fields when `BuzzerError.extra` is set, e.g. `IMAGE_IN_USE`'s `usage`; T8),
   `{"error":"VALIDATION_ERROR","detail":[…]}` from validation, and `{"detail": "..."}` from
   `HTTPException`. The player frontend only reads `detail`.

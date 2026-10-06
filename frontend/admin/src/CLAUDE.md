@@ -4,7 +4,7 @@
 The admin app: a React + Vite + Tailwind single-page desktop app for staff. It leads with
 admin tasks (users, courses, and who can host/play/use what) and keeps host tools (games,
 sessions, guests) as a secondary section. It manages courses and their student rosters,
-local user accounts and guests, games and their questions, per-user course (HOST/PLAYER) and game access grants, and past/live sessions (Canvas or raw
+local user accounts and guests, games and their questions, uploaded images (T8), per-user course (HOST/PLAYER) and game access grants, and past/live sessions (Canvas or raw
 CSV export, HTML report, delete). Plain REST only; it never opens a socket or shows a live
 game.
 
@@ -16,9 +16,9 @@ Top-level files:
   production, `/` in dev). `/login` is public. Everything else sits inside `RequireAdmin`
   (despite the name, it only checks that `localStorage.token` is **present**) and
   `AdminLayout`. Its sidebar has two sections: **Admin** (Users, Courses, Access) and **Host
-  tools** (Games, Sessions, Guests), plus the theme toggle and Logout. Routes: `/users`,
-  `/users/:userId`, `/courses`, `/courses/:courseId/roster`, `/access`, `/games`,
-  `/games/:gameId/questions`, `/sessions`, `/guests`. Anything else, and a successful login,
+  tools** (Games, Images, Sessions, Guests), plus the theme toggle and Logout. Routes:
+  `/users`, `/users/:userId`, `/courses`, `/courses/:courseId/roster`, `/access`, `/games`,
+  `/games/:gameId/questions`, `/images` (T8), `/sessions`, `/guests`. Anything else, and a successful login,
   goes to `/users`.
 - `theme.css` (T9) — the colour tokens as RGB-channel CSS variables (invariant, dark and
   light blocks), byte-identical to the player app's. Its block selectors are parsed literally
@@ -30,13 +30,14 @@ Top-level files:
   key is written) and runs a small inline script that sets `data-theme` before first paint,
   which must agree with `lib/theme.ts`.
 
-There's no `types/` directory. Each page declares its own response interfaces inline.
+There's no `types/` directory. Each page declares its own response interfaces inline (the T8
+image types are the exception: `components/ImagePicker.tsx` exports them).
 
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
 | `lib/` | `api.ts` REST wrapper with `get`/`post`/`put`/`patch`/`delete`, `postForm` (multipart upload) and `download` (Blob + `Content-Disposition` filename), showing the server's error `message`; `cn()`; (T7) `mapPin.ts` and `images.ts` and (T9) `theme.ts`, byte-identical across all three apps. No role logic. `api.ts` is identical to the host app's. |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), byte-identical to the host app's, `MoveGamePanel` (the move/assign-with-preview flow shared by `GamesPage` and `AccessPage`), (T7) `MapCanvas` for placing map-pin targets, and (T9) `ThemeToggle`. |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), byte-identical to the host app's, `MoveGamePanel` (the move/assign-with-preview flow shared by `GamesPage` and `AccessPage`, incl. T8's image move/copy counts), (T7) `MapCanvas` for placing map-pin targets, (T8) `AuthImage` (byte-identical in all three apps) and `ImagePicker` (byte-identical to the host's), and (T9) `ThemeToggle`. |
 | `pages/` | One self-contained page per route (`useState` + `load()`, no shared store). |
 
 ## How it fits together
@@ -66,7 +67,8 @@ Every call is under `/api/admin/*` and guarded by `require_admin`, with two exce
   HOST on G's course, plus a grant if G is `restricted`. ADMIN bypasses all of it, so grants on
   an ADMIN user have no effect.
 - **Games belong to a course** (T4). `GamesPage` requires a course on create and import.
-  "Move / assign" changes it, after previewing which grants would stop working.
+  "Move / assign" changes it, after previewing which grants would stop working (and, since
+  T8, how many images move with the game or are copied).
   `AccessPage` is the "who can host this course / use this game" view.
 - **Roster ≠ course access.** `CourseRoster` rows (keyed by netid, not a user FK) let a student
   **join as a player**, as does a `UserCourseAccess` PLAYER/HOST row. Roster rows grant nothing
@@ -79,7 +81,7 @@ Every call is under `/api/admin/*` and guarded by `require_admin`, with two exce
 3. `AccessPage`: grant the instructor HOST on the course.
 4. From here the instructor can upload the roster and create games/questions in the host app.
    Alternatively, the admin does it here: `RosterPage` (column-mapping wizard), then
-   `GamesPage` + `QuestionEditorPage`.
+   `GamesPage` + `QuestionEditorPage` (+ `ImagesPage` for the course's images, T8).
 5. After the game has run: hosts download CSV/HTML from the host app; the admin also has Canvas
    CSV and the HTML report on `SessionsPage`.
 
@@ -112,9 +114,12 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
   and both game frontends.
 - **Literal `…` / `±` / `·` escape sequences render on screen** in several JSX text
   spots, including every question line in both question editors (`pages/CLAUDE.md`).
-- **Duplicated code across apps.** `lib/api.ts` and `components/ui/*` are identical copies of
-  the host app's, and the host's `pages/manage/QuestionEditorPage.tsx` is an adapted copy of
-  this app's `QuestionEditorPage`. Fixes don't propagate.
+- **Duplicated code across apps.** `lib/api.ts`, `components/ui/*` and (T8)
+  `components/ImagePicker.tsx` are identical copies of the host app's, and the host's
+  `pages/manage/QuestionEditorPage.tsx` and `pages/manage/ImagesPage.tsx` are adapted copies of
+  this app's `QuestionEditorPage` and `ImagesPage`. Fixes don't propagate.
+- **The T8 image UI was never run in a browser.** There's no test runner, and the picker,
+  option images and `ImagesPage` haven't been clicked through yet (`pages/CLAUDE.md`).
 - **Colours come only from theme tokens.** The Tailwind palette is replaced, so a leftover raw
   class compiles to nothing, with no error. Run `python scripts/check_theme.py` before an MR;
   it isn't in CI. See `frontend/CLAUDE.md` and `pages/CLAUDE.md` "Theme conventions".
