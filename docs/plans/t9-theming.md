@@ -576,6 +576,10 @@ Work file by file and apply this table.
   - Don't build a separate "disabled" colour.
   - Don't show "disabled" by colour alone on a control that is actually enabled.
   - The map pin uses `map-pin-disabled`.
+  - The `Button` variants' hover classes are `enabled:hover:…`, so a disabled button doesn't
+    react to hover. A `className` that overrides a `Button`'s hover must also use
+    `enabled:hover:`: the `:enabled` pseudo-class gives the variant rule higher specificity than
+    a plain `hover:` override, which would otherwise lose.
 - **Anything not covered here** (one-offs such as `text-slate-900` or `bg-slate-600` in a chip):
   choose the token by role. If no token fits, **add a token** to §4.3, `theme.css` (all three
   apps) and the config, **and add its pairs to the contrast list in `check_theme.py` and
@@ -1119,3 +1123,7 @@ Per `.claude/rules/context-sync.md`, update:
     not taken at §4.16's viewports, and `player-join` shows `NamePage`. The "after" images stay at
     the spec viewports, `docs/ui/README.md` notes the size mismatch, and the `player-join`
     "after" image shows `NamePage` to match (§4.16).
+- 2026-10-05 — Implementation review after step 4 (user decision): the `Button` variants'
+  hover classes become `enabled:hover:…`. Replacing `disabled:pointer-events-none` with the
+  standard `disabled:cursor-not-allowed` had made disabled buttons react to hover. Hover
+  overrides passed to a `Button` must use `enabled:hover:` too (§4.11, disabled state).
