@@ -363,13 +363,15 @@ export default function UserDetailPage() {
                     <span className="flex-1 text-sm text-fg">
                       {course ? `${course.name} \u2014 ${course.semester}` : `Course ${sel.id}`}
                     </span>
-                    <div className="flex rounded overflow-hidden border border-line-strong text-xs">
+                    {/* No overflow-hidden: it clipped the segments' focus outlines. The end segments are
+                        rounded instead. */}
+                    <div className="flex rounded border border-line-strong text-xs">
                       <button
-                        className={`px-2 py-1 ${sel.role === 'HOST' ? 'bg-accent text-on-accent' : 'text-fg-muted enabled:hover:text-fg'}`}
+                        className={`px-2 py-1 rounded-l ${sel.role === 'HOST' ? 'bg-accent text-on-accent' : 'text-fg-muted enabled:hover:text-fg'}`}
                         onClick={() => setCourseSelections((prev) => prev.map((s, j) => j === i ? { ...s, role: 'HOST' } : s))}
                       >{sel.role === 'HOST' && '✓ '}HOST</button>
                       <button
-                        className={`px-2 py-1 ${sel.role === 'PLAYER' ? 'bg-accent text-on-accent' : 'text-fg-muted enabled:hover:text-fg'}`}
+                        className={`px-2 py-1 rounded-r ${sel.role === 'PLAYER' ? 'bg-accent text-on-accent' : 'text-fg-muted enabled:hover:text-fg'}`}
                         onClick={() => setCourseSelections((prev) => prev.map((s, j) => j === i ? { ...s, role: 'PLAYER' } : s))}
                       >{sel.role === 'PLAYER' && '✓ '}PLAYER</button>
                     </div>
