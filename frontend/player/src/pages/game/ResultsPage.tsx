@@ -3,6 +3,7 @@ import { MapPinCanvas } from '../../components/MapPinCanvas';
 import { mapPinDistance, type Point } from '../../lib/mapPin';
 import type { MapPinReveal, PlayerResultsPayload } from '../../types/game';
 import { ThemeToggle } from '../../components/ThemeToggle';
+import { AuthImage } from '../../components/AuthImage';
 
 function asPin(value: unknown): Point | null {
   if (!value || typeof value !== 'object') return null;
@@ -118,6 +119,13 @@ export default function ResultsPage() {
     currentQuestion?.type ?? '',
     currentQuestion?.config.options,
   );
+  // T8: an image option is shown as its letter plus a thumbnail instead of text.
+  const answeredIndex =
+    currentQuestion?.type === 'multiple_choice' && typeof lastAnswerData?.selectedIndex === 'number'
+      ? lastAnswerData.selectedIndex
+      : null;
+  const answeredImageId =
+    answeredIndex !== null ? currentQuestion?.config.optionImageIds?.[answeredIndex] ?? null : null;
   const isCompleteness = answerReveal.type === 'completeness';
   const isFitb = answerReveal.type === 'fill_in_the_blank';
   const isCorrect = !isCompleteness && yourPoints > 0;
@@ -139,7 +147,18 @@ export default function ResultsPage() {
       )}
 
       {/* What the player answered */}
-      {answeredLabel && (
+      {answeredImageId && answeredIndex !== null ? (
+        <div className="flex items-center gap-3 text-fg-muted text-base">
+          <span>
+            You answered: <span className="text-fg font-semibold">{String.fromCharCode(65 + answeredIndex)}</span>
+          </span>
+          <AuthImage
+            imageId={answeredImageId}
+            alt={currentQuestion?.imageAlt?.[answeredImageId] ?? ''}
+            className="h-20 w-20"
+          />
+        </div>
+      ) : answeredLabel && (
         <p className="text-fg-muted text-base">
           You answered: <span className="text-fg font-semibold">{answeredLabel}</span>
         </p>

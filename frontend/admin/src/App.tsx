@@ -1,5 +1,5 @@
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useNavigate, NavLink } from 'react-router-dom';
-import { BookOpen, Users, Gamepad2, UserX, LogOut, History, KeyRound } from 'lucide-react';
+import { BookOpen, Users, Gamepad2, UserX, LogOut, History, KeyRound, Image } from 'lucide-react';
 import LoginPage from './pages/LoginPage';
 import CoursesPage from './pages/CoursesPage';
 import RosterPage from './pages/RosterPage';
@@ -10,6 +10,7 @@ import GamesPage from './pages/GamesPage';
 import QuestionEditorPage from './pages/QuestionEditorPage';
 import SessionsPage from './pages/SessionsPage';
 import AccessPage from './pages/AccessPage';
+import ImagesPage from './pages/ImagesPage';
 import { ThemeToggle } from './components/ThemeToggle';
 
 function RequireAdmin() {
@@ -57,6 +58,9 @@ function AdminLayout() {
           <NavLink to="/games" className={linkClass}>
             <Gamepad2 size={16} /> Games
           </NavLink>
+          <NavLink to="/images" className={linkClass}>
+            <Image size={16} /> Images
+          </NavLink>
           <NavLink to="/sessions" className={linkClass}>
             <History size={16} /> Sessions
           </NavLink>
@@ -97,6 +101,7 @@ export default function App() {
             <Route path="/guests" element={<GuestsPage />} />
             <Route path="/games" element={<GamesPage />} />
             <Route path="/games/:gameId/questions" element={<QuestionEditorPage />} />
+            <Route path="/images" element={<ImagesPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/access" element={<AccessPage />} />
           </Route>

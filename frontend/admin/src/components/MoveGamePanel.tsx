@@ -11,7 +11,13 @@ interface DroppedGrant {
   display_name: string | null;
 }
 
-interface MoveResult { applied: boolean; dropped_grants: DroppedGrant[] }
+interface MoveResult {
+  applied: boolean;
+  dropped_grants: DroppedGrant[];
+  /** T8: images only this game uses (re-tagged) / shared with other games (copied). */
+  images_moved: number;
+  images_copied: number;
+}
 
 function userLabel(u: DroppedGrant): string {
   return u.display_name || u.username || u.netid || u.user_id;
@@ -37,7 +43,7 @@ export function MoveGamePanel({
   onCancel: () => void;
 }) {
   const [target, setTarget] = useState<number | ''>(fixedCourseId ?? '');
-  const [preview, setPreview] = useState<DroppedGrant[] | null>(null);
+  const [preview, setPreview] = useState<MoveResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -51,7 +57,7 @@ export function MoveGamePanel({
         confirm,
       });
       if (result.applied) onDone();
-      else setPreview(result.dropped_grants);
+      else setPreview(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Move failed');
     } finally {
@@ -80,13 +86,19 @@ export function MoveGamePanel({
         </select>
       )}
       {preview !== null && (
-        preview.length === 0 ? (
+        preview.dropped_grants.length === 0 ? (
           <p className="text-fg">No grants will be dropped.</p>
         ) : (
           <p className="text-warning-fg">
-            These users will lose access: {preview.map(userLabel).join(', ')}
+            These users will lose access: {preview.dropped_grants.map(userLabel).join(', ')}
           </p>
         )
+      )}
+      {preview !== null && ((preview.images_moved ?? 0) > 0 || (preview.images_copied ?? 0) > 0) && (
+        <p className="text-fg">
+          {preview.images_moved ?? 0} image(s) will move to this course,{' '}
+          {preview.images_copied ?? 0} shared image(s) will be copied.
+        </p>
       )}
       {error && <p className="text-danger-fg">{error}</p>}
       <div className="flex gap-2">

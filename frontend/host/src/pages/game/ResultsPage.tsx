@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { MapPinHeatmap } from '../../components/MapPinHeatmap';
-import type { AnswerReveal } from '../../types/game';
+import { AuthImage } from '../../components/AuthImage';
+import type { AnswerReveal, QuestionConfig } from '../../types/game';
 
 const RESULTS_DISPLAY_SECONDS = 10;
 
@@ -120,7 +121,8 @@ function WordCloud({ distribution, answerReveal, totalAnswered, totalPlayers }: 
 // ---------------------------------------------------------------------------
 
 interface BarChartProps {
-  bars: { label: string; count: number; correct: boolean | null }[];
+  /** T8: an image option has `imageId` (label is then just the letter) and its alt text. */
+  bars: { label: string; count: number; correct: boolean | null; imageId?: string | null; alt?: string }[];
   totalAnswered: number;
   totalPlayers: number;
 }
@@ -140,9 +142,16 @@ function AnswerBarChart({ bars, totalAnswered, totalPlayers }: BarChartProps) {
         // No text inside the bar: the count and "✓ Correct" sit beside it, on the page.
         return (
           <div key={i} className="flex items-center gap-4">
-            <span className="w-64 shrink-0 text-right text-fg text-xl font-bold break-words">
-              {bar.label}
-            </span>
+            {bar.imageId ? (
+              <span className="w-64 shrink-0 flex items-center justify-end gap-3 text-fg text-xl font-bold">
+                {bar.label}
+                <AuthImage imageId={bar.imageId} alt={bar.alt ?? ''} className="h-16 w-16" />
+              </span>
+            ) : (
+              <span className="w-64 shrink-0 text-right text-fg text-xl font-bold break-words">
+                {bar.label}
+              </span>
+            )}
             <div className="flex-1 bg-chart-track rounded-full h-10 overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-500 ${barColor}`}
@@ -171,12 +180,22 @@ function AnswerBarChart({ bars, totalAnswered, totalPlayers }: BarChartProps) {
 function buildBars(
   reveal: AnswerReveal,
   distribution: Record<string, number>,
-  options: string[] | undefined,
+  config: QuestionConfig | undefined,
+  imageAlt: Record<string, string> | undefined,
 ): BarChartProps['bars'] {
+  const options = config?.options;
+  // T8: an image option's text is "", so its label is the letter plus a thumbnail.
+  const optionBar = (opt: string, i: number) => {
+    const imageId = config?.optionImageIds?.[i] ?? null;
+    return imageId
+      ? { label: optionLabel(i), imageId, alt: imageAlt?.[imageId] ?? '' }
+      : { label: `${optionLabel(i)}  ${opt}` };
+  };
+
   if (reveal.type === 'multiple_choice') {
     const opts = options ?? [];
     return opts.map((opt, i) => ({
-      label: `${optionLabel(i)}  ${opt}`,
+      ...optionBar(opt, i),
       count: distribution[String(i)] ?? 0,
       correct: reveal.correctIndices.includes(i),
     }));
@@ -185,7 +204,7 @@ function buildBars(
   if (reveal.type === 'multi_select') {
     const opts = options ?? [];
     return opts.map((opt, i) => ({
-      label: `${optionLabel(i)}  ${opt}`,
+      ...optionBar(opt, i),
       count: distribution[String(i)] ?? 0,
       correct: (reveal.answerPoints[i] ?? 0) > 0,
     }));
@@ -201,7 +220,7 @@ function buildBars(
   // completeness (non-FITB) — no right/wrong
   if (options && options.length > 0) {
     return options.map((opt, i) => ({
-      label: `${optionLabel(i)}  ${opt}`,
+      ...optionBar(opt, i),
       count: distribution[String(i)] ?? 0,
       correct: null,
     }));
@@ -250,7 +269,8 @@ export default function ResultsPage() {
       ? buildBars(
           questionResults.answerReveal,
           questionResults.answerDistribution,
-          currentQuestion?.config?.options,
+          currentQuestion?.config,
+          currentQuestion?.imageAlt,
         )
       : [];
 

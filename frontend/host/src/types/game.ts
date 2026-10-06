@@ -35,7 +35,14 @@ export interface MapPinConfig {
 export interface QuestionConfig extends Partial<MapPinConfig> {
   options?: string[];
   maxLength?: number;
+  /** T8: one image shown with the prompt (projector only); any question type. */
+  promptImageId?: string;
+  /** T8: multiple_choice / multi_select only; same length as `options`, null = text option. */
+  optionImageIds?: (string | null)[];
 }
+
+/** T8: image ID → alt text, for every image the question references; omitted when none. */
+export type ImageAltMap = Record<string, string>;
 
 /** Same reveal for both grading types (spec §4.6). Radii in image-width units. */
 export interface MapPinReveal {
@@ -72,6 +79,7 @@ export interface QuestionPayload {
   pointsValue: number;
   editDistance?: number;
   startedAt?: string;  // ISO timestamp — only present in sync_state reconnect payloads
+  imageAlt?: ImageAltMap;
 }
 
 export interface AnswerStatusPayload {
@@ -130,6 +138,7 @@ export interface HostQuestionSummaryItem {
   /** map_pin only, from geometry (both grading types); null when nobody answered. */
   withinFullPct?: number | null;
   averageCredit?: number | null;
+  imageAlt?: ImageAltMap;
 }
 
 export interface HostGameOverPayload {

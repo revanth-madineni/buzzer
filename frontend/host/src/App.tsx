@@ -10,7 +10,7 @@ import {
   useNavigate,
   useParams,
 } from 'react-router-dom';
-import { Gamepad2, History, LogOut, Play, Users } from 'lucide-react';
+import { Gamepad2, History, Image, LogOut, Play, Users } from 'lucide-react';
 import { api } from './lib/api';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
@@ -23,11 +23,12 @@ import GamesPage from './pages/manage/GamesPage';
 import QuestionEditorPage from './pages/manage/QuestionEditorPage';
 import RosterPage from './pages/manage/RosterPage';
 import SessionsPage from './pages/manage/SessionsPage';
+import ImagesPage from './pages/manage/ImagesPage';
 import { ThemeToggle } from './components/ThemeToggle';
 
 interface Course { id: number; name: string; semester: string }
 
-const SECTIONS = ['games', 'roster', 'sessions'] as const;
+const SECTIONS = ['games', 'roster', 'images', 'sessions'] as const;
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!localStorage.getItem('token')) return <Navigate to="/login" replace />;
@@ -90,6 +91,9 @@ function HostLayout() {
           <NavLink to={`/courses/${courseId}/roster`} className={linkClass}>
             <Users size={16} /> Roster
           </NavLink>
+          <NavLink to={`/courses/${courseId}/images`} className={linkClass}>
+            <Image size={16} /> Images
+          </NavLink>
           <NavLink to={`/courses/${courseId}/sessions`} className={linkClass}>
             <History size={16} /> Sessions
           </NavLink>
@@ -125,6 +129,7 @@ export default function App() {
           <Route path="games" element={<GamesPage />} />
           <Route path="games/:gameId/questions" element={<QuestionEditorPage />} />
           <Route path="roster" element={<RosterPage />} />
+          <Route path="images" element={<ImagesPage />} />
           <Route path="sessions" element={<SessionsPage />} />
         </Route>
         <Route path="/game/:code" element={<RequireAuth><GameLayout /></RequireAuth>}>

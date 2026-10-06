@@ -9,6 +9,15 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Card, CardContent, CardHeader } from '../../components/ui/card';
 import { MapCanvas } from '../../components/MapCanvas';
+import { AuthImage } from '../../components/AuthImage';
+import {
+  ALT_TEXT_MISSING,
+  FILE_INPUT_CLASS,
+  IMAGE_ACCEPT,
+  ImagePicker,
+  type ImageInfo,
+  type ImageListItem,
+} from '../../components/ImagePicker';
 import { drawTarget, type DrawRect, type Point } from '../../lib/mapPin';
 
 type QuestionType = 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select' | 'map_pin';
@@ -24,22 +33,39 @@ interface Question {
   time_limit_seconds: number;
   points_value: number;
   order_index: number;
+  /** {imageId: alt_text} for every image the question references (T8). */
+  image_alt?: Record<string, string>;
 }
 
 interface Game { id: number; title: string; course_id?: number | null }
 
-/** POST .../images response (never includes the bytes). */
-interface ImageInfo { id: string; mime_type: string; width: number; height: number; byte_size: number }
-
-type UploadImage = (file: File) => Promise<ImageInfo>;
+type UploadImage = (file: File, alt: string) => Promise<ImageInfo>;
+type ListImages = () => Promise<ImageListItem[]>;
 
 // ---- helpers for building config/answer_data per type ----
 
-interface McOption { text: string; points: number }
+/** An option is text or an image (T8): with `imageId` set, `text` is kept but not sent. */
+interface McOption { text: string; points: number; imageId: string | null }
+
+/** config.options + config.optionImageIds (omitted when no option has an image). */
+function optionsConfig(options: McOption[]): Record<string, unknown> {
+  const config: Record<string, unknown> = {
+    options: options.map((o) => (o.imageId ? '' : o.text)),
+  };
+  if (options.some((o) => o.imageId)) config.optionImageIds = options.map((o) => o.imageId);
+  return config;
+}
+
+/** Why options with images can't be saved, or null. No check without option images. */
+function optionImagesFormError(options: McOption[]): string | null {
+  if (!options.some((o) => o.imageId)) return null;
+  const i = options.findIndex((o) => !o.imageId && !o.text.trim());
+  return i === -1 ? null : `Option ${i + 1} needs text or an image.`;
+}
 
 function buildMcPayload(options: McOption[], _grading: GradingType) {
   return {
-    config: { options: options.map((o) => o.text) },
+    config: optionsConfig(options),
     answer_data: { answer_points: options.map((o) => o.points) },
   };
 }
@@ -53,7 +79,7 @@ function buildTfPayload(truePoints: number, falsePoints: number) {
 
 function buildMsPayload(options: McOption[]) {
   return {
-    config: { options: options.map((o) => o.text) },
+    config: optionsConfig(options),
     answer_data: { answer_points: options.map((o) => o.points) },
   };
 }
@@ -77,6 +103,10 @@ interface FormState {
   type: QuestionType;
   grading: GradingType;
   prompt: string;
+  /** Prompt image (T8), any type; shown on the projector. */
+  promptImageId: string | null;
+  /** Alt text of the images in this form, for display only (never sent). */
+  imageAlt: Record<string, string>;
   timeLimitSeconds: number;
   pointsValue: number;
   // multiple_choice
@@ -122,14 +152,16 @@ const defaultForm = (): FormState => ({
   type: 'multiple_choice',
   grading: 'ACCURACY',
   prompt: '',
+  promptImageId: null,
+  imageAlt: {},
   timeLimitSeconds: 30,
   pointsValue: 1,
-  mcOptions: [{ text: '', points: 1 }, { text: '', points: 0 }],
+  mcOptions: [{ text: '', points: 1, imageId: null }, { text: '', points: 0, imageId: null }],
   tfTruePoints: 1,
   tfFalsePoints: 0,
   fibAnswers: [{ text: '', points: 1 }],
   fibEditDistance: 0,
-  msOptions: [{ text: '', points: 1 }, { text: '', points: 1 }],
+  msOptions: [{ text: '', points: 1, imageId: null }, { text: '', points: 1, imageId: null }],
   imageId: null,
   imageWidth: null,
   imageHeight: null,
@@ -145,13 +177,20 @@ function questionToForm(q: Question): FormState {
     type: q.type,
     grading: q.grading_type,
     prompt: q.prompt,
+    promptImageId: (q.config['promptImageId'] as string | undefined) ?? null,
+    imageAlt: { ...(q.image_alt ?? {}) },
     timeLimitSeconds: q.time_limit_seconds,
     pointsValue: q.points_value,
   };
+  const optionImageIds = (q.config['optionImageIds'] as (string | null)[] | undefined) ?? [];
   if (q.type === 'multiple_choice') {
     const opts = (q.config['options'] as string[]) ?? [];
     const pts = (q.answer_data['answer_points'] as number[]) ?? [];
-    base.mcOptions = opts.map((text, i) => ({ text, points: pts[i] ?? 0 }));
+    base.mcOptions = opts.map((text, i) => ({
+      text,
+      points: pts[i] ?? 0,
+      imageId: optionImageIds[i] ?? null,
+    }));
   } else if (q.type === 'true_false') {
     const ap = q.answer_data['answer_points'] as { true: number; false: number } | undefined;
     base.tfTruePoints = ap?.true ?? 1;
@@ -167,8 +206,8 @@ function questionToForm(q: Question): FormState {
     const opts = (q.config['options'] as string[]) ?? [];
     const pts = (q.answer_data['answer_points'] as number[]) ?? [];
     base.msOptions = opts.length
-      ? opts.map((text, i) => ({ text, points: pts[i] ?? 1 }))
-      : [{ text: '', points: 1 }, { text: '', points: 1 }];
+      ? opts.map((text, i) => ({ text, points: pts[i] ?? 1, imageId: optionImageIds[i] ?? null }))
+      : defaultForm().msOptions;
   } else if (q.type === 'map_pin') {
     const cfg = q.config as { imageId?: string; imageWidth?: number; imageHeight?: number };
     const ad = q.answer_data as {
@@ -200,7 +239,8 @@ function formToPayload(form: FormState) {
     config = p.config;
     answer_data = p.answer_data;
   } else if (form.type === 'multi_select') {
-    const p = buildMsPayload(form.msOptions.filter((o) => o.text.trim()));
+    // Blank options are dropped; an option with an image isn't blank (T8).
+    const p = buildMsPayload(form.msOptions.filter((o) => o.imageId || o.text.trim()));
     config = p.config;
     answer_data = p.answer_data;
   } else if (form.type === 'map_pin') {
@@ -217,6 +257,7 @@ function formToPayload(form: FormState) {
     config = p.config;
     answer_data = p.answer_data;
   }
+  if (form.promptImageId) config = { ...config, promptImageId: form.promptImageId };
   const points_value =
     form.grading === 'COMPLETENESS' || form.type === 'map_pin'
       ? form.pointsValue
@@ -275,17 +316,235 @@ function RadiusInput({
   );
 }
 
-function MapPinFields({
+type SetField = <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+
+/** Thumbnail + alt text (or the empty-alt warning) of an image in the form. */
+function ImagePreview({ imageId, alt, size }: { imageId: string; alt: string; size: 'sm' | 'md' }) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <AuthImage
+        imageId={imageId}
+        alt={alt}
+        className={`${size === 'sm' ? 'h-10 w-14' : 'h-20 w-28'} shrink-0 rounded`}
+      />
+      {alt ? (
+        <span className="text-xs text-fg truncate">{alt}</span>
+      ) : (
+        <span className="text-xs text-warning-fg">{ALT_TEXT_MISSING}</span>
+      )}
+    </div>
+  );
+}
+
+/** Prompt image (T8): any question type, shown on the projector under the prompt. */
+function PromptImageField({
   form,
   set,
+  listImages,
   uploadImage,
 }: {
   form: FormState;
-  set: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  set: SetField;
+  listImages: ListImages;
+  uploadImage: UploadImage;
+}) {
+  const [picking, setPicking] = useState(false);
+  return (
+    <div className="space-y-2">
+      <label className="block text-xs text-fg-muted">Prompt image (shown on the projector)</label>
+      {form.promptImageId ? (
+        <div className="flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <ImagePreview
+              imageId={form.promptImageId}
+              alt={form.imageAlt[form.promptImageId] ?? ''}
+              size="md"
+            />
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={() => setPicking(true)}>
+            Change
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => set('promptImageId', null)}>
+            Remove
+          </Button>
+        </div>
+      ) : (
+        <Button type="button" variant="outline" size="sm" onClick={() => setPicking(true)}>
+          <Plus size={12} className="mr-1" /> Add image
+        </Button>
+      )}
+      {picking && (
+        <ImagePicker
+          listImages={listImages}
+          uploadImage={uploadImage}
+          onPick={(img) => {
+            set('imageAlt', { ...form.imageAlt, [img.id]: img.alt_text });
+            set('promptImageId', img.id);
+            setPicking(false);
+          }}
+          onCancel={() => setPicking(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Options of a multiple choice or multi-select question. Each option is text or an image
+ * (T8); the image lives on the option object, so adding or deleting options keeps it with
+ * its option.
+ */
+function OptionList({
+  form,
+  set,
+  field,
+  pointsLabel,
+  minPoints,
+  newPoints,
+  listImages,
+  uploadImage,
+}: {
+  form: FormState;
+  set: SetField;
+  field: 'mcOptions' | 'msOptions';
+  pointsLabel: string;
+  minPoints?: string;
+  newPoints: number;
+  listImages: ListImages;
+  uploadImage: UploadImage;
+}) {
+  const [pickingFor, setPickingFor] = useState<number | null>(null);
+  const options = form[field];
+
+  function update(i: number, patch: Partial<McOption>) {
+    const opts = [...options];
+    opts[i] = { ...opts[i], ...patch };
+    set(field, opts);
+  }
+
+  return (
+    <>
+      {form.grading === 'ACCURACY' && (
+        <div className="flex gap-2 mb-1 px-0.5">
+          <span className="flex-1 text-xs text-fg-muted">Answer text or image</span>
+          <span className="w-24 text-xs text-fg-muted">{pointsLabel}</span>
+          <span className="w-20" />
+          {options.length > 2 && <span className="w-7" />}
+        </div>
+      )}
+      <div className="space-y-2">
+        {options.map((opt, i) => (
+          <div key={i} className="space-y-2">
+            <div className="flex gap-2 items-center">
+              {opt.imageId ? (
+                <div className="flex-1 min-w-0 flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <ImagePreview
+                      imageId={opt.imageId}
+                      alt={form.imageAlt[opt.imageId] ?? ''}
+                      size="sm"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => update(i, { imageId: null })}
+                  >
+                    Remove image
+                  </Button>
+                </div>
+              ) : (
+                <Input
+                  placeholder={`Option ${i + 1}`}
+                  value={opt.text}
+                  onChange={(e) => update(i, { text: e.target.value })}
+                  className="flex-1 text-sm"
+                />
+              )}
+              {form.grading === 'ACCURACY' && (
+                <Input
+                  type="number"
+                  placeholder="pts"
+                  value={opt.points}
+                  onChange={(e) => update(i, { points: Number(e.target.value) })}
+                  className="w-24 text-sm"
+                  min={minPoints}
+                  step="any"
+                />
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-20 shrink-0"
+                onClick={() => setPickingFor(pickingFor === i ? null : i)}
+              >
+                Image
+              </Button>
+              {options.length > 2 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setPickingFor(null);
+                    set(field, options.filter((_, j) => j !== i));
+                  }}
+                >
+                  <Trash2 size={12} />
+                </Button>
+              )}
+            </div>
+            {pickingFor === i && (
+              <ImagePicker
+                listImages={listImages}
+                uploadImage={uploadImage}
+                onPick={(img) => {
+                  set('imageAlt', { ...form.imageAlt, [img.id]: img.alt_text });
+                  update(i, { imageId: img.id });
+                  setPickingFor(null);
+                }}
+                onCancel={() => setPickingFor(null)}
+              />
+            )}
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => set(field, [...options, { text: '', points: newPoints, imageId: null }])}
+        >
+          <Plus size={12} className="mr-1" /> Add option
+        </Button>
+      </div>
+    </>
+  );
+}
+
+function MapPinFields({
+  form,
+  set,
+  listImages,
+  uploadImage,
+}: {
+  form: FormState;
+  set: SetField;
+  listImages: ListImages;
   uploadImage: UploadImage;
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [picking, setPicking] = useState(false);
+
+  function applyImage(img: ImageInfo) {
+    set('imageAlt', { ...form.imageAlt, [img.id]: img.alt_text });
+    set('imageId', img.id);
+    set('imageWidth', img.width);
+    set('imageHeight', img.height);
+  }
 
   async function handleFile(file: File | undefined) {
     if (!file) return;
@@ -293,10 +552,8 @@ function MapPinFields({
     setUploadError('');
     try {
       // "Replace image" = upload a new one; the old image row is left as it is.
-      const img = await uploadImage(file);
-      set('imageId', img.id);
-      set('imageWidth', img.width);
-      set('imageHeight', img.height);
+      const img = await uploadImage(file, '');
+      applyImage(img);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
@@ -320,18 +577,36 @@ function MapPinFields({
         <label className="block text-xs text-fg-muted mb-1">
           {form.imageId ? 'Replace image' : 'Upload image'} (PNG, JPEG or WebP, up to 2 MB)
         </label>
-        <input
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          disabled={uploading}
-          onChange={(e) => {
-            void handleFile(e.target.files?.[0]);
-            e.target.value = '';
-          }}
-          className="block text-sm text-fg file:mr-3 file:rounded-lg file:border-0 file:bg-surface-hover file:px-3 file:py-1.5 file:text-fg"
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="file"
+            accept={IMAGE_ACCEPT}
+            disabled={uploading}
+            onChange={(e) => {
+              void handleFile(e.target.files?.[0]);
+              e.target.value = '';
+            }}
+            className={FILE_INPUT_CLASS}
+          />
+          <Button type="button" variant="outline" size="sm" onClick={() => setPicking(true)}>
+            Choose from images
+          </Button>
+        </div>
         {uploading && <p className="text-fg-muted text-xs mt-1">Uploading…</p>}
         {uploadError && <p className="text-danger-fg text-xs mt-1">{uploadError}</p>}
+        {picking && (
+          <div className="mt-2">
+            <ImagePicker
+              listImages={listImages}
+              uploadImage={uploadImage}
+              onPick={(img) => {
+                applyImage(img);
+                setPicking(false);
+              }}
+              onCancel={() => setPicking(false)}
+            />
+          </div>
+        )}
       </div>
 
       {form.imageId && form.imageWidth && form.imageHeight && (
@@ -386,12 +661,14 @@ function QuestionForm({
   onSave,
   onCancel,
   saving,
+  listImages,
   uploadImage,
 }: {
   initial: FormState;
   onSave: (payload: ReturnType<typeof formToPayload>) => void;
   onCancel: () => void;
   saving: boolean;
+  listImages: ListImages;
   uploadImage: UploadImage;
 }) {
   const [form, setForm] = useState<FormState>(initial);
@@ -445,127 +722,37 @@ function QuestionForm({
         />
       </div>
 
+      <PromptImageField form={form} set={set} listImages={listImages} uploadImage={uploadImage} />
+
       {/* Type-specific */}
       {form.type === 'multiple_choice' && (
         <div>
           <label className="block text-xs text-fg-muted mb-2">Options</label>
-          {form.grading === 'ACCURACY' && (
-            <div className="flex gap-2 mb-1 px-0.5">
-              <span className="flex-1 text-xs text-fg-muted">Answer text</span>
-              <span className="w-24 text-xs text-fg-muted">Points</span>
-              {form.mcOptions.length > 2 && <span className="w-7" />}
-            </div>
-          )}
-          <div className="space-y-2">
-            {form.mcOptions.map((opt, i) => (
-              <div key={i} className="flex gap-2 items-center">
-                <Input
-                  placeholder={`Option ${i + 1}`}
-                  value={opt.text}
-                  onChange={(e) => {
-                    const opts = [...form.mcOptions];
-                    opts[i] = { ...opts[i], text: e.target.value };
-                    set('mcOptions', opts);
-                  }}
-                  className="flex-1 text-sm"
-                />
-                {form.grading === 'ACCURACY' && (
-                  <Input
-                    type="number"
-                    placeholder="pts"
-                    value={opt.points}
-                    onChange={(e) => {
-                      const opts = [...form.mcOptions];
-                      opts[i] = { ...opts[i], points: Number(e.target.value) };
-                      set('mcOptions', opts);
-                    }}
-                    className="w-24 text-sm"
-                    min="0"
-                    step="any"
-                  />
-                )}
-                {form.mcOptions.length > 2 && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => set('mcOptions', form.mcOptions.filter((_, j) => j !== i))}
-                  >
-                    <Trash2 size={12} />
-                  </Button>
-                )}
-              </div>
-            ))}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => set('mcOptions', [...form.mcOptions, { text: '', points: 0 }])}
-            >
-              <Plus size={12} className="mr-1" /> Add option
-            </Button>
-          </div>
+          <OptionList
+            form={form}
+            set={set}
+            field="mcOptions"
+            pointsLabel="Points"
+            minPoints="0"
+            newPoints={0}
+            listImages={listImages}
+            uploadImage={uploadImage}
+          />
         </div>
       )}
 
       {form.type === 'multi_select' && (
         <div>
           <label className="block text-xs text-fg-muted mb-2">Options</label>
-          {form.grading === 'ACCURACY' && (
-            <div className="flex gap-2 mb-1 px-0.5">
-              <span className="flex-1 text-xs text-fg-muted">Answer text</span>
-              <span className="w-24 text-xs text-fg-muted">Points (neg = penalty)</span>
-              {form.msOptions.length > 2 && <span className="w-7" />}
-            </div>
-          )}
-          <div className="space-y-2">
-            {form.msOptions.map((opt, i) => (
-              <div key={i} className="flex gap-2 items-center">
-                <Input
-                  placeholder={`Option ${i + 1}`}
-                  value={opt.text}
-                  onChange={(e) => {
-                    const opts = [...form.msOptions];
-                    opts[i] = { ...opts[i], text: e.target.value };
-                    set('msOptions', opts);
-                  }}
-                  className="flex-1 text-sm"
-                />
-                {form.grading === 'ACCURACY' && (
-                  <Input
-                    type="number"
-                    placeholder="pts"
-                    value={opt.points}
-                    onChange={(e) => {
-                      const opts = [...form.msOptions];
-                      opts[i] = { ...opts[i], points: Number(e.target.value) };
-                      set('msOptions', opts);
-                    }}
-                    className="w-24 text-sm"
-                    step="any"
-                  />
-                )}
-                {form.msOptions.length > 2 && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => set('msOptions', form.msOptions.filter((_, j) => j !== i))}
-                  >
-                    <Trash2 size={12} />
-                  </Button>
-                )}
-              </div>
-            ))}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => set('msOptions', [...form.msOptions, { text: '', points: 1 }])}
-            >
-              <Plus size={12} className="mr-1" /> Add option
-            </Button>
-          </div>
+          <OptionList
+            form={form}
+            set={set}
+            field="msOptions"
+            pointsLabel="Points (neg = penalty)"
+            newPoints={1}
+            listImages={listImages}
+            uploadImage={uploadImage}
+          />
           {form.grading === 'ACCURACY' && (
             <p className="text-fg-muted text-xs mt-1">
               Correct options: positive pts. Distractors: negative pts (penalty). Score = sum of selected, capped at 0.
@@ -674,7 +861,9 @@ function QuestionForm({
         </div>
       )}
 
-      {form.type === 'map_pin' && <MapPinFields form={form} set={set} uploadImage={uploadImage} />}
+      {form.type === 'map_pin' && (
+        <MapPinFields form={form} set={set} listImages={listImages} uploadImage={uploadImage} />
+      )}
 
       {/* Time + points */}
       <div className="flex gap-4">
@@ -710,7 +899,14 @@ function QuestionForm({
         <Button
           type="button"
           onClick={() => {
-            const blocked = form.type === 'map_pin' ? mapPinFormError(form) : null;
+            const blocked =
+              form.type === 'map_pin'
+                ? mapPinFormError(form)
+                : form.type === 'multiple_choice'
+                ? optionImagesFormError(form.mcOptions)
+                : form.type === 'multi_select'
+                ? optionImagesFormError(form.msOptions)
+                : null;
             setFormError(blocked ?? '');
             if (!blocked) onSave(formToPayload(form));
           }}
@@ -734,6 +930,35 @@ function mapPinSummary(q: Question): string {
   const t = ad.targets?.[0];
   const target = t ? `(${t.x.toFixed(2)}, ${t.y.toFixed(2)})` : '(not set)';
   return `Map pin — target ${target}, r ${ad.fullRadius ?? '?'} → ${ad.zeroRadius ?? '?'}`;
+}
+
+/** Number of options that are images (T8). */
+function optionImageCount(q: Question): number {
+  const ids = (q.config['optionImageIds'] as (string | null)[] | undefined) ?? [];
+  return ids.filter(Boolean).length;
+}
+
+/** An option in the list: its text, or a thumbnail when it is an image (T8). */
+function OptionLabel({
+  q,
+  index,
+  text,
+  className,
+}: {
+  q: Question;
+  index: number;
+  text: string;
+  className: string;
+}) {
+  const imageId = ((q.config['optionImageIds'] as (string | null)[] | undefined) ?? [])[index];
+  if (!imageId) return <span className={className}>{text}</span>;
+  const alt = q.image_alt?.[imageId] ?? '';
+  return (
+    <span className="flex items-center gap-2">
+      <AuthImage imageId={imageId} alt={alt} className="h-8 w-12 rounded" />
+      <span className={className}>{alt}</span>
+    </span>
+  );
 }
 
 // ---- Main page ----
@@ -766,11 +991,24 @@ export default function QuestionEditorPage() {
 
   useEffect(() => { void load(); }, [gameId]);
 
-  /** Host uploads go to the course in the route. */
-  async function uploadImage(file: File): Promise<ImageInfo> {
+  /**
+   * Images belong to the game's own course (from GET /host/games/{id}), never the :courseId
+   * route param, which is only for navigation and can differ from the game's course.
+   */
+  function gameCourseId(): number {
+    if (game?.course_id == null) throw new Error('This game has no course, so it has no images.');
+    return game.course_id;
+  }
+
+  async function listImages(): Promise<ImageListItem[]> {
+    return api.get<ImageListItem[]>(`/host/courses/${gameCourseId()}/images`);
+  }
+
+  async function uploadImage(file: File, alt: string): Promise<ImageInfo> {
     const form = new FormData();
     form.append('file', file);
-    return api.postForm<ImageInfo>(`/host/courses/${courseId}/images`, form);
+    form.append('alt_text', alt);
+    return api.postForm<ImageInfo>(`/host/courses/${gameCourseId()}/images`, form);
   }
 
   async function addQuestion(payload: ReturnType<typeof formToPayload>) {
@@ -868,6 +1106,7 @@ export default function QuestionEditorPage() {
               onSave={(payload) => void addQuestion(payload)}
               onCancel={() => setShowAddForm(false)}
               saving={saving}
+              listImages={listImages}
               uploadImage={uploadImage}
             />
           </CardContent>
@@ -893,6 +1132,7 @@ export default function QuestionEditorPage() {
                     onSave={(payload) => void updateQuestion(q.id, payload)}
                     onCancel={() => setEditingId(null)}
                     saving={saving}
+                    listImages={listImages}
                     uploadImage={uploadImage}
                   />
                 </CardContent>
@@ -926,6 +1166,16 @@ export default function QuestionEditorPage() {
                     <span className="rounded px-1.5 py-0.5 text-xs font-semibold bg-surface-alt text-fg-muted">
                       {q.grading_type}
                     </span>
+                    {optionImageCount(q) > 0 && (
+                      <span className="rounded px-1.5 py-0.5 text-xs font-semibold bg-surface-alt text-fg-muted">
+                        {optionImageCount(q)} image option{optionImageCount(q) !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {typeof q.config['promptImageId'] === 'string' && (
+                      <span className="rounded px-1.5 py-0.5 text-xs font-semibold bg-surface-alt text-fg-muted">
+                        prompt image
+                      </span>
+                    )}
                     <span className="text-fg-muted text-xs">{q.time_limit_seconds}s \u00b7 {q.points_value}pts</span>
                   </div>
                   <p className="text-fg text-sm leading-relaxed">{q.prompt}</p>
@@ -939,7 +1189,7 @@ export default function QuestionEditorPage() {
                             <span className={pts > 0 ? 'text-success-fg' : 'text-fg-muted'}>
                               {pts > 0 ? '\u2713' : '\u25cb'}
                             </span>
-                            <span className={pts > 0 ? 'text-fg' : 'text-fg-muted'}>{opt}</span>
+                            <OptionLabel q={q} index={oi} text={opt} className={pts > 0 ? 'text-fg' : 'text-fg-muted'} />
                             {pts > 0 && <span className="text-fg-muted">({pts}pts)</span>}
                           </div>
                         );
@@ -985,7 +1235,7 @@ export default function QuestionEditorPage() {
                             <span className={isCorrect ? 'text-success-fg' : pts < 0 ? 'text-danger-fg' : 'text-fg-muted'}>
                               {isCorrect ? '\u2713' : pts < 0 ? '\u2212' : '\u25cb'}
                             </span>
-                            <span className={isCorrect ? 'text-fg' : 'text-fg-muted'}>{opt}</span>
+                            <OptionLabel q={q} index={oi} text={opt} className={isCorrect ? 'text-fg' : 'text-fg-muted'} />
                             {pts !== 0 && <span className="text-fg-muted">({pts > 0 ? '+' : ''}{pts}pts)</span>}
                           </div>
                         );

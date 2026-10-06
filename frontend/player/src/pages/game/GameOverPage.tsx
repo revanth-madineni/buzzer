@@ -3,6 +3,7 @@ import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import type { PlayerAnswerReveal, QuestionSummaryItem } from '../../types/game';
 import { ThemeToggle } from '../../components/ThemeToggle';
+import { AuthImage } from '../../components/AuthImage';
 
 function describePlayerAnswer(
   playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[] } | null,
@@ -60,6 +61,49 @@ function describeCorrectAnswer(
   return '';
 }
 
+/** T8: option indices as letters, with a thumbnail for image options and text otherwise. */
+function OptionChoices({ item, indices }: { item: QuestionSummaryItem; indices: number[] }) {
+  const options = item.config.options ?? [];
+  return (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {indices.map((i) => {
+        const imageId = item.config.optionImageIds?.[i] ?? null;
+        return (
+          <span key={i} className="inline-flex items-center gap-1">
+            {String.fromCharCode(65 + i)}
+            {imageId ? (
+              <AuthImage imageId={imageId} alt={item.imageAlt?.[imageId] ?? ''} className="h-12 w-12" />
+            ) : options[i] !== undefined ? (
+              ` — ${options[i]}`
+            ) : null}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** Indices to draw as OptionChoices, or null to keep the plain text label. */
+function imageChoiceIndices(item: QuestionSummaryItem, which: 'player' | 'correct'): number[] | null {
+  if (!(item.config.optionImageIds ?? []).some((id) => !!id)) return null;
+  if (which === 'player') {
+    if (!item.playerAnswer) return null;
+    if (item.type === 'multiple_choice' && typeof item.playerAnswer.selectedIndex === 'number') {
+      return [item.playerAnswer.selectedIndex];
+    }
+    if (item.type === 'multi_select' && item.playerAnswer.selectedIndices?.length) {
+      return item.playerAnswer.selectedIndices;
+    }
+    return null;
+  }
+  const reveal = item.answerReveal;
+  if (reveal.type === 'multiple_choice') return reveal.correctIndices;
+  if (reveal.type === 'multi_select') {
+    return reveal.answerPoints.map((p, i) => (p > 0 ? i : -1)).filter((i) => i >= 0);
+  }
+  return null;
+}
+
 function QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number }) {
   const options = item.config.options;
   const isCompleteness =
@@ -77,6 +121,8 @@ function QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number
   const correctAnswerLabel = !isCompleteness
     ? describeCorrectAnswer(item.answerReveal, options)
     : '';
+  const playerImageChoices = imageChoiceIndices(item, 'player');
+  const correctImageChoices = imageChoiceIndices(item, 'correct');
 
   return (
     <div className="bg-surface rounded-xl p-4 border border-line">
@@ -96,16 +142,27 @@ function QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number
             ) : (
               <span className="text-danger-fg text-base">✗</span>
             )}
-            <span className={`text-sm font-semibold truncate ${
+            <span className={`text-sm font-semibold ${playerImageChoices ? '' : 'truncate'} ${
               noAnswer ? 'text-fg-muted' :
               isCompleteness ? 'text-accent-fg' :
               isCorrect ? 'text-success-fg' : 'text-danger-fg'
             }`}>
-              {playerAnswerLabel}
+              {playerImageChoices ? (
+                <OptionChoices item={item} indices={playerImageChoices} />
+              ) : (
+                playerAnswerLabel
+              )}
             </span>
           </div>
 
-          {showCorrectAnswer && correctAnswerLabel && (
+          {showCorrectAnswer && correctImageChoices && correctImageChoices.length > 0 ? (
+            <div className="text-fg-muted text-xs mt-1 flex items-center gap-2">
+              Correct:
+              <span className="text-success-fg font-medium">
+                <OptionChoices item={item} indices={correctImageChoices} />
+              </span>
+            </div>
+          ) : showCorrectAnswer && correctAnswerLabel && (
             <p className="text-fg-muted text-xs mt-1">
               Correct: <span className="text-success-fg font-medium">{correctAnswerLabel}</span>
             </p>
