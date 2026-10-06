@@ -6,14 +6,14 @@ import { clampPoint, type Point } from '../../lib/mapPin';
 import type { QuestionPayload } from '../../types/game';
 
 const OPTION_COLORS = [
-  'bg-red-600 hover:bg-red-500 border-red-500',
-  'bg-blue-600 hover:bg-blue-500 border-blue-500',
-  'bg-yellow-500 hover:bg-yellow-400 border-yellow-400',
-  'bg-green-600 hover:bg-green-500 border-green-500',
-  'bg-purple-600 hover:bg-purple-500 border-purple-500',
-  'bg-orange-500 hover:bg-orange-400 border-orange-400',
-  'bg-pink-600 hover:bg-pink-500 border-pink-500',
-  'bg-teal-600 hover:bg-teal-500 border-teal-500',
+  'bg-answer-1 text-on-answer-1 border-answer-1',
+  'bg-answer-2 text-on-answer-2 border-answer-2',
+  'bg-answer-3 text-on-answer-3 border-answer-3',
+  'bg-answer-4 text-on-answer-4 border-answer-4',
+  'bg-answer-5 text-on-answer-5 border-answer-5',
+  'bg-answer-6 text-on-answer-6 border-answer-6',
+  'bg-answer-7 text-on-answer-7 border-answer-7',
+  'bg-answer-8 text-on-answer-8 border-answer-8',
 ];
 
 function optionLabel(i: number): string {
@@ -21,7 +21,7 @@ function optionLabel(i: number): string {
 }
 
 const rejectedMsg = (
-  <p className="text-center text-amber-400 text-sm mt-4 font-semibold">
+  <p className="text-center text-warning-fg text-sm mt-4 font-semibold">
     Not recorded — time ran out
   </p>
 );
@@ -52,7 +52,7 @@ function MapPinQuestion({
 
   const { imageId, imageWidth, imageHeight } = question.config;
   if (!imageId || !imageWidth || !imageHeight) {
-    return <p className="text-slate-400 text-center p-6">This question has no map.</p>;
+    return <p className="text-fg-muted text-center p-6">This question has no map.</p>;
   }
 
   const inactive = submitted || questionLocked || answerRejected;
@@ -61,7 +61,7 @@ function MapPinQuestion({
   return (
     <div className="py-6 px-4 flex flex-col gap-3">
       <div className="pb-2">{header}</div>
-      <p className="text-center text-slate-400 text-sm">
+      <p className="text-center text-fg-muted text-sm">
         {pin ? 'Drag or tap to adjust, then confirm' : 'Tap the map to place your pin'}
       </p>
       <MapPinCanvas
@@ -82,15 +82,15 @@ function MapPinQuestion({
             setSubmitted(true);
             emitAnswer(question.questionId, { x, y }, Date.now() - startTime);
           }}
-          className="w-full rounded-2xl py-5 text-white font-black text-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed mt-2"
+          className="w-full rounded-2xl py-5 text-on-accent font-black text-2xl bg-accent enabled:hover:bg-accent-hover active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-2"
         >
           Confirm
         </button>
       )}
-      {submitted && <p className="text-center text-slate-400 text-sm mt-2">Pin submitted — waiting for results…</p>}
+      {submitted && <p className="text-center text-fg-muted text-sm mt-2">Pin submitted — waiting for results…</p>}
       {!submitted && answerRejected && rejectedMsg}
       {!submitted && !answerRejected && questionLocked && (
-        <p className="text-center text-amber-400 text-sm mt-2 font-semibold">
+        <p className="text-center text-warning-fg text-sm mt-2 font-semibold">
           Answers locked — waiting for results…
         </p>
       )}
@@ -122,7 +122,7 @@ export default function QuestionPage() {
   if (!currentQuestion) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-slate-400">Loading question…</p>
+        <p className="text-fg-muted">Loading question…</p>
       </div>
     );
   }
@@ -134,13 +134,13 @@ export default function QuestionPage() {
   }
 
   const questionLabel = (
-    <p className="text-slate-400 text-sm text-center tracking-wide uppercase mb-1">
+    <p className="text-fg-muted text-sm text-center tracking-wide uppercase mb-1">
       Question {currentQuestion.questionNumber} of {currentQuestion.totalQuestions}
     </p>
   );
 
   const lockedMsg = (
-    <p className="text-center text-amber-400 text-sm mt-4 font-semibold">
+    <p className="text-center text-warning-fg text-sm mt-4 font-semibold">
       Answers locked — waiting for results…
     </p>
   );
@@ -158,7 +158,7 @@ export default function QuestionPage() {
             key={i}
             disabled={submitted || questionLocked || answerRejected}
             onClick={() => submit({ selectedIndex: i })}
-            className={`w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-left text-white font-semibold text-lg border-2 transition-all
+            className={`w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-left font-semibold text-lg border-2 transition-all
               ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
               ${OPTION_COLORS[i % OPTION_COLORS.length]}`}
           >
@@ -166,7 +166,7 @@ export default function QuestionPage() {
             <span>{opt}</span>
           </button>
         ))}
-        {submitted && <p className="text-center text-slate-400 text-sm mt-4">Answer submitted — waiting for results…</p>}
+        {submitted && <p className="text-center text-fg-muted text-sm mt-4">Answer submitted — waiting for results…</p>}
         {!submitted && answerRejected && rejectedMsg}
         {!submitted && !answerRejected && questionLocked && lockedMsg}
       </div>
@@ -181,20 +181,20 @@ export default function QuestionPage() {
         <button
           disabled={submitted || questionLocked || answerRejected}
           onClick={() => submit({ selectedValue: true })}
-          className={`w-full rounded-2xl py-8 text-white font-black text-3xl border-2 border-green-500 transition-all
-            ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed bg-green-700' : 'bg-green-600 hover:bg-green-500 active:scale-95'}`}
+          className={`w-full rounded-2xl py-8 text-on-answer-4 font-black text-3xl border-2 border-answer-4 bg-answer-4 transition-all
+            ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}`}
         >
           True
         </button>
         <button
           disabled={submitted || questionLocked || answerRejected}
           onClick={() => submit({ selectedValue: false })}
-          className={`w-full rounded-2xl py-8 text-white font-black text-3xl border-2 border-red-500 transition-all
-            ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed bg-red-700' : 'bg-red-600 hover:bg-red-500 active:scale-95'}`}
+          className={`w-full rounded-2xl py-8 text-on-answer-1 font-black text-3xl border-2 border-answer-1 bg-answer-1 transition-all
+            ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}`}
         >
           False
         </button>
-        {submitted && <p className="text-center text-slate-400 text-sm mt-2">Answer submitted — waiting for results…</p>}
+        {submitted && <p className="text-center text-fg-muted text-sm mt-2">Answer submitted — waiting for results…</p>}
         {!submitted && answerRejected && rejectedMsg}
         {!submitted && !answerRejected && questionLocked && lockedMsg}
       </div>
@@ -211,9 +211,9 @@ export default function QuestionPage() {
         {submitted ? (
           <div className="flex flex-col items-center gap-3">
             <div className="text-5xl">🔒</div>
-            <p className="text-slate-100 text-xl font-bold">Answer locked in!</p>
-            <p className="text-slate-400 text-base italic">"{inputValue.trim()}"</p>
-            <p className="text-slate-500 text-sm mt-2">Waiting for results…</p>
+            <p className="text-fg text-xl font-bold">Answer locked in!</p>
+            <p className="text-fg-muted text-base italic">"{inputValue.trim()}"</p>
+            <p className="text-fg-muted text-sm mt-2">Waiting for results…</p>
           </div>
         ) : answerRejected ? (
           <div className="flex flex-col items-center gap-3 mt-4">
@@ -239,12 +239,12 @@ export default function QuestionPage() {
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Type your answer…"
               autoFocus
-              className="w-full rounded-xl px-4 py-4 text-slate-900 text-xl bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full rounded-xl px-4 py-4 border border-line-strong text-fg text-xl bg-surface"
             />
             <button
               type="submit"
               disabled={!inputValue.trim()}
-              className="w-full rounded-2xl py-5 text-white font-black text-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-full rounded-2xl py-5 text-on-accent font-black text-2xl bg-accent enabled:hover:bg-accent-hover active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Submit
             </button>
@@ -262,7 +262,7 @@ export default function QuestionPage() {
           {questionLabel}
           <TimerBar key={currentQuestion.questionId} totalSeconds={currentQuestion.timeLimitSeconds} paused={questionLocked} />
         </div>
-        <p className="text-center text-slate-400 text-sm">Select all that apply</p>
+        <p className="text-center text-fg-muted text-sm">Select all that apply</p>
         {options.map((opt, i) => {
           const isSelected = selectedIndices.has(i);
           return (
@@ -273,12 +273,12 @@ export default function QuestionPage() {
               className={`w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-left font-semibold text-lg border-2 transition-all
                 ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
                 ${isSelected
-                  ? 'bg-indigo-600 border-indigo-400 text-white'
-                  : 'bg-slate-700 border-slate-600 text-slate-200 hover:bg-slate-600'
+                  ? 'bg-accent border-on-accent text-on-accent'
+                  : 'bg-surface border-line-strong text-fg enabled:hover:bg-surface-hover'
                 }`}
             >
               <span className={`text-xl font-black w-8 shrink-0 flex items-center justify-center rounded-md border-2 transition-colors
-                ${isSelected ? 'border-white bg-white text-indigo-700' : 'border-slate-500 text-slate-400'}`}>
+                ${isSelected ? 'border-on-accent bg-on-accent text-accent' : 'border-line-strong text-fg-muted'}`}>
                 {isSelected ? '✓' : optionLabel(i)}
               </span>
               <span>{opt}</span>
@@ -289,12 +289,12 @@ export default function QuestionPage() {
           <button
             disabled={selectedIndices.size === 0}
             onClick={() => submit({ selectedIndices: Array.from(selectedIndices) })}
-            className="w-full rounded-2xl py-5 text-white font-black text-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed mt-2"
+            className="w-full rounded-2xl py-5 text-on-accent font-black text-2xl bg-accent enabled:hover:bg-accent-hover active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-2"
           >
             Submit ({selectedIndices.size} selected)
           </button>
         )}
-        {submitted && <p className="text-center text-slate-400 text-sm mt-4">Answer submitted — waiting for results…</p>}
+        {submitted && <p className="text-center text-fg-muted text-sm mt-4">Answer submitted — waiting for results…</p>}
         {!submitted && answerRejected && rejectedMsg}
         {!submitted && !answerRejected && questionLocked && lockedMsg}
       </div>
@@ -319,7 +319,7 @@ export default function QuestionPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
-      <p className="text-slate-400">Unsupported question type.</p>
+      <p className="text-fg-muted">Unsupported question type.</p>
     </div>
   );
 }
