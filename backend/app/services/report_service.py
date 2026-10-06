@@ -30,6 +30,7 @@ from .game_service import (
     map_pin_click,
     map_pin_reveal,
     map_pin_stats,
+    question_image_ids,
 )
 
 
@@ -150,15 +151,46 @@ def _build_histogram(scores: list[float], max_possible: float) -> list[dict]:
 _OPTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
+def _image_svg(image: Image, css_class: str, height: int | None = None) -> str:
+    """An embedded image drawn by reference (`<use>`), with its alt text as the
+    SVG's title. `height` fixes the rendered height (thumbnails); the width follows
+    the aspect ratio."""
+    alt = image.alt_text or "Image"
+    size = ""
+    if height is not None:
+        size = (
+            f' height="{height}" width="{round(height * image.width / image.height)}"'
+        )
+    return (
+        f'<svg class="{css_class}" viewBox="0 0 {image.width} {image.height}"{size} '
+        f'role="img" aria-label="{_esc(alt)}"><title>{_esc(alt)}</title>'
+        f'<use href="#img-{_esc(image.id)}"/></svg>'
+    )
+
+
+def _option_label(q: Question, i: int, opt: object, images: dict[str, Image]) -> str:
+    """Letter + text, or letter + thumbnail for an image option (T8, MC only)."""
+    ids = (q.config or {}).get("optionImageIds")
+    image_id = ids[i] if isinstance(ids, list) and i < len(ids) else None
+    image = images.get(image_id) if isinstance(image_id, str) else None
+    if image is not None:
+        return f"{_OPTION_LETTERS[i]} {_image_svg(image, 'opt-img', 48)}"
+    return f"{_OPTION_LETTERS[i]} {_esc(opt)}"
+
+
 def _render_bar_chart(
-    q: Question, dist: dict[str, int], reveal: dict, total_players: int
+    q: Question,
+    dist: dict[str, int],
+    reveal: dict,
+    total_players: int,
+    images: dict[str, Image],
 ) -> str:
     options = q.config.get("options", [])
 
     if q.type == "multiple_choice":
         bars = [
             {
-                "label": f"{_OPTION_LETTERS[i]} {_esc(opt)}",
+                "label": _option_label(q, i, opt, images),
                 "count": dist.get(str(i), 0),
                 "correct": (i in reveal.get("correctIndices", []))
                 if reveal.get("type") == "multiple_choice"
@@ -265,8 +297,9 @@ def _render_word_cloud(q: Question, dist: dict[str, int], reveal: dict) -> str:
     return "\n".join(parts)
 
 
-def _render_map_image_defs(images: dict[str, Image]) -> str:
-    """Each distinct map image once, as a data URI in a hidden SVG's <defs>.
+def _render_image_defs(images: dict[str, Image]) -> str:
+    """Each distinct drawn image (map, prompt, MC option) once, as a data URI in a
+    hidden SVG's <defs>.
 
     The report is a standalone file and can't call the authenticated image GET, so
     images are embedded; per-question SVGs reference them with <use>, so an image
@@ -278,7 +311,7 @@ def _render_map_image_defs(images: dict[str, Image]) -> str:
     for image_id, image in images.items():
         data = base64.b64encode(image.data).decode("ascii")
         defs.append(
-            f'<image id="mapimg-{_esc(image_id)}" '
+            f'<image id="img-{_esc(image_id)}" '
             f'href="data:{_esc(image.mime_type)};base64,{data}" '
             f'width="{image.width}" height="{image.height}"/>'
         )
@@ -300,7 +333,7 @@ def _render_map_pin(reveal: dict, dist: dict[str, int], image: Image | None) -> 
             f'<svg class="map-svg" viewBox="0 0 {w} {h}" role="img" '
             'aria-label="Map with answer heatmap and target">'
         ),
-        f'<use href="#mapimg-{_esc(image.id)}"/>',
+        f'<use href="#img-{_esc(image.id)}"/>',
     ]
     cells = []
     for key, count in dist.items():
@@ -403,6 +436,8 @@ body{
 .badge-fitb{background:#3b2f1e;color:#fbbf24}
 .badge-map{background:#3b1e2a;color:#f9a8d4}
 .map-svg{display:block;width:100%;height:auto;max-height:640px;border-radius:12px;background:#0f172a}
+.prompt-img{display:block;max-width:100%;height:auto;max-height:360px;margin:0 0 16px;border-radius:8px}
+.opt-img{vertical-align:middle;border-radius:4px}
 .badge-accuracy{background:#2e1b3d;color:#c084fc}
 .badge-completeness{background:#2d2d1a;color:#fde68a}
 .q-timing{margin-left:auto;color:#475569;font-size:0.78rem}
@@ -494,14 +529,18 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
     )
     all_scores = s_result.scalars().all()
 
-    # Map images, loaded once each with their bytes (images are immutable).
-    map_images: dict[str, Image] = {}
+    # The images the report draws, each loaded once with its bytes: map, prompt
+    # (every type) and MC option images (T8 §4.12). Multi-select isn't rendered by
+    # the report, so its option images aren't embedded.
+    images: dict[str, Image] = {}
     for q in questions:
-        image_id = (q.config or {}).get("imageId") if q.type == "map_pin" else None
-        if isinstance(image_id, str) and image_id not in map_images:
-            image = await image_service.get_image_with_data(db, image_id)
-            if image is not None:
-                map_images[image_id] = image
+        for image_id, role in question_image_ids(q.type, q.config):
+            if role == "option" and q.type != "multiple_choice":
+                continue
+            if image_id not in images:
+                image = await image_service.get_image_with_data(db, image_id)
+                if image is not None:
+                    images[image_id] = image
 
     # Group by question
     by_question: dict[int, list[SessionScore]] = defaultdict(list)
@@ -553,12 +592,12 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
         pts_label = f"{pts_val} pt{'s' if q.points_value != 1 else ''}"
 
         if q.type in ("multiple_choice", "true_false"):
-            chart = _render_bar_chart(q, dict(dist), reveal, total_players)
+            chart = _render_bar_chart(q, dict(dist), reveal, total_players, images)
         elif q.type == "fill_in_the_blank":
             chart = _render_word_cloud(q, dict(dist), reveal)
         elif q.type == "map_pin":
             chart = _render_map_pin(
-                reveal, dict(dist), map_images.get((q.config or {}).get("imageId"))
+                reveal, dict(dist), images.get((q.config or {}).get("imageId"))
             )
         else:
             chart = ""
@@ -592,6 +631,13 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
         else:
             stats = f'<div class="q-stats">{answered} / {total_players} answered</div>'
 
+        prompt_image_id = (q.config or {}).get("promptImageId")
+        prompt_image = (
+            _image_svg(images[prompt_image_id], "prompt-img")
+            if isinstance(prompt_image_id, str) and prompt_image_id in images
+            else ""
+        )
+
         # Prompt was already bleach-sanitised on write; embed as HTML
         q_sections.append(
             f'<div class="q-card">'
@@ -602,6 +648,7 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
             f'<span class="q-timing">{q.time_limit_seconds}s · {_esc(pts_label)}</span>'
             f"</div>"
             f'<p class="prompt">{q.prompt}</p>'
+            f"{prompt_image}"
             f"{chart}"
             f"{stats}"
             f"</div>"
@@ -629,7 +676,7 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
 <style>{_CSS}</style>
 </head>
 <body>
-{_render_map_image_defs(map_images)}
+{_render_image_defs(images)}
 <div class="container">
 
 <div class="rpt-header">

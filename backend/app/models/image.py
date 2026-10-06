@@ -10,7 +10,11 @@ from ..database import Base
 
 
 class Image(Base):
-    """An uploaded image (T7 map-pin). Immutable: never edited or replaced.
+    """An uploaded image (T7 map pin, T8 prompts and options).
+
+    Bytes and dimensions are immutable: "replace" uploads a new row and re-points
+    questions. Only `alt_text` (descriptive) and `course_id` (ownership, re-tagged when
+    a game moves, T8 §4.7a) are updated in place; neither affects geometry.
 
     `data` is deferred so metadata queries never load the bytes. No relationships to
     User/Course, so there is no cascade to reason about; questions reference images by
@@ -35,5 +39,8 @@ class Image(Base):
     )
     course_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("courses.id", ondelete="SET NULL"), nullable=True
+    )
+    alt_text: Mapped[str] = mapped_column(
+        String(250), nullable=False, server_default=""
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

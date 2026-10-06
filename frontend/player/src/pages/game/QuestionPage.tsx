@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import { useGame } from './GameLayout';
 import { TimerBar } from '../../components/ui/TimerBar';
 import { MapPinCanvas } from '../../components/MapPinCanvas';
+import { AuthImage } from '../../components/AuthImage';
 import { clampPoint, type Point } from '../../lib/mapPin';
 import type { QuestionPayload } from '../../types/game';
 
@@ -18,6 +19,34 @@ const OPTION_COLORS = [
 
 function optionLabel(i: number): string {
   return String.fromCharCode(65 + i); // A, B, C, … Z
+}
+
+/** T8: option i's image ID, or null for a text option. */
+function optionImageId(question: QuestionPayload, i: number): string | null {
+  return question.config.optionImageIds?.[i] ?? null;
+}
+
+/** T8: any image option switches the options to a 2-column grid of square buttons. */
+function hasOptionImages(question: QuestionPayload): boolean {
+  return (question.config.optionImageIds ?? []).some((id) => !!id);
+}
+
+/** The button carries the description, so the <img> inside it gets alt="" (not read twice). */
+function imageOptionLabel(question: QuestionPayload, i: number, imageId: string): string {
+  const alt = question.imageAlt?.[imageId] ?? '';
+  return alt ? `Option ${optionLabel(i)}: ${alt}` : `Option ${optionLabel(i)}, image`;
+}
+
+/** Body of a grid cell under its letter badge: the image, or the option's text. */
+function GridCellBody({ imageId, text }: { imageId: string | null; text: string }) {
+  if (imageId) {
+    return <AuthImage imageId={imageId} alt="" className="flex-1 min-h-0 w-full rounded-xl" />;
+  }
+  return (
+    <span className="flex-1 min-h-0 flex items-center justify-center text-center break-words overflow-hidden">
+      {text}
+    </span>
+  );
 }
 
 const rejectedMsg = (
@@ -153,19 +182,43 @@ export default function QuestionPage() {
           {questionLabel}
           <TimerBar key={currentQuestion.questionId} totalSeconds={currentQuestion.timeLimitSeconds} paused={questionLocked} />
         </div>
-        {options.map((opt, i) => (
-          <button
-            key={i}
-            disabled={submitted || questionLocked || answerRejected}
-            onClick={() => submit({ selectedIndex: i })}
-            className={`w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-left font-semibold text-lg border-2 transition-all
-              ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
-              ${OPTION_COLORS[i % OPTION_COLORS.length]}`}
-          >
-            <span className="text-2xl font-black w-8 shrink-0">{optionLabel(i)}</span>
-            <span>{opt}</span>
-          </button>
-        ))}
+        {hasOptionImages(currentQuestion) ? (
+          <div className="grid grid-cols-2 gap-3">
+            {options.map((opt, i) => {
+              const imageId = optionImageId(currentQuestion, i);
+              return (
+                <button
+                  key={i}
+                  disabled={submitted || questionLocked || answerRejected}
+                  onClick={() => submit({ selectedIndex: i })}
+                  aria-label={imageId ? imageOptionLabel(currentQuestion, i, imageId) : undefined}
+                  className={`aspect-square flex flex-col gap-1 rounded-2xl p-2 text-left font-semibold text-lg border-2 transition-all
+                    ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
+                    ${OPTION_COLORS[i % OPTION_COLORS.length]}`}
+                >
+                  <span className="text-2xl font-black px-1 leading-none" aria-hidden={imageId ? true : undefined}>
+                    {optionLabel(i)}
+                  </span>
+                  <GridCellBody imageId={imageId} text={opt} />
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          options.map((opt, i) => (
+            <button
+              key={i}
+              disabled={submitted || questionLocked || answerRejected}
+              onClick={() => submit({ selectedIndex: i })}
+              className={`w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-left font-semibold text-lg border-2 transition-all
+                ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
+                ${OPTION_COLORS[i % OPTION_COLORS.length]}`}
+            >
+              <span className="text-2xl font-black w-8 shrink-0">{optionLabel(i)}</span>
+              <span>{opt}</span>
+            </button>
+          ))
+        )}
         {submitted && <p className="text-center text-fg-muted text-sm mt-4">Answer submitted — waiting for results…</p>}
         {!submitted && answerRejected && rejectedMsg}
         {!submitted && !answerRejected && questionLocked && lockedMsg}
@@ -263,28 +316,58 @@ export default function QuestionPage() {
           <TimerBar key={currentQuestion.questionId} totalSeconds={currentQuestion.timeLimitSeconds} paused={questionLocked} />
         </div>
         <p className="text-center text-fg-muted text-sm">Select all that apply</p>
-        {options.map((opt, i) => {
-          const isSelected = selectedIndices.has(i);
-          return (
-            <button
-              key={i}
-              disabled={submitted || questionLocked || answerRejected}
-              onClick={() => toggleIndex(i)}
-              className={`w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-left font-semibold text-lg border-2 transition-all
-                ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
-                ${isSelected
-                  ? 'bg-accent border-on-accent text-on-accent'
-                  : 'bg-surface border-line-strong text-fg enabled:hover:bg-surface-hover'
-                }`}
-            >
-              <span className={`text-xl font-black w-8 shrink-0 flex items-center justify-center rounded-md border-2 transition-colors
-                ${isSelected ? 'border-on-accent bg-on-accent text-accent' : 'border-line-strong text-fg-muted'}`}>
-                {isSelected ? '✓' : optionLabel(i)}
-              </span>
-              <span>{opt}</span>
-            </button>
-          );
-        })}
+        {hasOptionImages(currentQuestion) ? (
+          <div className="grid grid-cols-2 gap-3">
+            {options.map((opt, i) => {
+              const isSelected = selectedIndices.has(i);
+              const imageId = optionImageId(currentQuestion, i);
+              return (
+                <button
+                  key={i}
+                  disabled={submitted || questionLocked || answerRejected}
+                  onClick={() => toggleIndex(i)}
+                  aria-label={imageId ? imageOptionLabel(currentQuestion, i, imageId) : undefined}
+                  aria-pressed={isSelected}
+                  className={`aspect-square flex flex-col gap-1 rounded-2xl p-2 text-left font-semibold text-lg border-2 transition-all
+                    ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
+                    ${isSelected
+                      ? 'bg-accent border-on-accent text-on-accent'
+                      : 'bg-surface border-line-strong text-fg enabled:hover:bg-surface-hover'
+                    }`}
+                >
+                  <span className={`text-xl font-black w-8 h-8 shrink-0 flex items-center justify-center rounded-md border-2 transition-colors
+                    ${isSelected ? 'border-on-accent bg-on-accent text-accent' : 'border-line-strong text-fg-muted'}`}>
+                    {isSelected ? '✓' : optionLabel(i)}
+                  </span>
+                  <GridCellBody imageId={imageId} text={opt} />
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          options.map((opt, i) => {
+            const isSelected = selectedIndices.has(i);
+            return (
+              <button
+                key={i}
+                disabled={submitted || questionLocked || answerRejected}
+                onClick={() => toggleIndex(i)}
+                className={`w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-left font-semibold text-lg border-2 transition-all
+                  ${submitted || questionLocked || answerRejected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
+                  ${isSelected
+                    ? 'bg-accent border-on-accent text-on-accent'
+                    : 'bg-surface border-line-strong text-fg enabled:hover:bg-surface-hover'
+                  }`}
+              >
+                <span className={`text-xl font-black w-8 shrink-0 flex items-center justify-center rounded-md border-2 transition-colors
+                  ${isSelected ? 'border-on-accent bg-on-accent text-accent' : 'border-line-strong text-fg-muted'}`}>
+                  {isSelected ? '✓' : optionLabel(i)}
+                </span>
+                <span>{opt}</span>
+              </button>
+            );
+          })
+        )}
         {!submitted && !questionLocked && !answerRejected && (
           <button
             disabled={selectedIndices.size === 0}

@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
+import { AuthImage } from '../../components/AuthImage';
 import type { AnswerReveal, HostQuestionSummaryItem } from '../../types/game';
 
 const TARGET_BUCKETS = 8;
@@ -134,19 +135,35 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
         </div>
       </div>
 
-      {/* Prompt */}
-      <p className="text-fg text-lg font-semibold leading-snug">{prompt}</p>
+      {/* Prompt (T8: with a small thumbnail of the prompt image, when set) */}
+      {config.promptImageId ? (
+        <div className="flex items-start gap-4">
+          <AuthImage
+            imageId={config.promptImageId}
+            alt={item.imageAlt?.[config.promptImageId] ?? ''}
+            className="h-20 w-20 shrink-0"
+          />
+          <p className="text-fg text-lg font-semibold leading-snug">{prompt}</p>
+        </div>
+      ) : (
+        <p className="text-fg text-lg font-semibold leading-snug">{prompt}</p>
+      )}
 
       {/* Distribution */}
       <div className="space-y-2">
         {(type === 'multiple_choice' || type === 'multi_select') && (config.options ?? []).map((opt, i) => {
           const count = answerDistribution[String(i)] ?? 0;
           const correct = isCorrectIndex(i);
+          const imageId = config.optionImageIds?.[i] ?? null;
           return (
             <div key={i} className="space-y-0.5">
               <div className="flex items-center gap-2 text-lg text-fg">
                 <span className={`font-bold ${correct ? 'text-success-fg' : ''}`}>{optionLabel(i)}.</span>
-                <span className={correct ? 'text-success-fg' : ''}>{opt}</span>
+                {imageId ? (
+                  <AuthImage imageId={imageId} alt={item.imageAlt?.[imageId] ?? ''} className="h-16 w-16" />
+                ) : (
+                  <span className={correct ? 'text-success-fg' : ''}>{opt}</span>
+                )}
               </div>
               <AnswerBar
                 label={optionLabel(i)}

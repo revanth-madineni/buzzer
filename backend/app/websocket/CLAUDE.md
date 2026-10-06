@@ -21,7 +21,9 @@ here. Business logic is delegated to `services/game_service.py` and Redis state 
   - Background tasks: `_question_timer_task` (time limit → `answer_phase_ended` to host, then
     auto-lock 0.5 s later) and `_host_abandon_task` (5-min grace after host disconnect →
     `abandon_game`).
-  - Payload builders: `_question_payload` (no `answer_data`) and `_answer_reveal`.
+  - Payload builders: `_question_payload` (async since T8: adds `imageAlt` `{id: alt_text}`
+    for questions with images; **every** question sent to a client goes through it,
+    including the host's `sync_state` restore) and `_answer_reveal`.
   - `_emit_error(sid, message, code=None)` → `error` `{message, code?}`, and
     `_player_image_ids` (T7, the `imageIds` added to a player's `sync_state`).
   - `_client_ip` for per-IP connection rate limiting.
@@ -49,10 +51,12 @@ Client → server:
 | `submit_answer` | player | `{question_id: int, answer_data: {...}, answer_time_ms}` |
 
 Server → client: `sync_state` (to the joining sid; for a **player** in LOBBY/IN_PROGRESS it
-includes `imageIds`, the game's distinct map-pin images in question order, for preloading;
-stale in LOBBY if questions are edited), `game_images` `{imageIds}` (T7: room, emitted in
-`host_advance`'s start branch right after `start_game` and **before** the first
-`new_question`; final, since edits are locked once IN_PROGRESS), `new_question` (room),
+includes `imageIds`, the game's distinct images except prompt-only ones, in question order,
+for preloading; stale in LOBBY if questions are edited), `game_images` `{imageIds}` (emitted
+in `host_advance`'s start branch right after `start_game` and **before** the first
+`new_question`; final, since edits are locked once IN_PROGRESS. T8: sent **twice** — the
+player set to the room, then the host set incl. prompt images to `{code}:host`, so the host
+receives both), `new_question` (room),
 `question_results`
 (host: distribution; each player: own points/score/rank), `game_over` (host: anonymous scores +
 per-question summary; each player: own summary), `player_joined` / `player_left` /
@@ -88,8 +92,10 @@ Only the host advances; the timer never advances the phase, it just locks the qu
 ### Answer privacy
 `new_question` never includes `answer_data` (it does include `gradingType`, and `editDistance`
 for fill-in-the-blank). **Invariant: nothing secret may ever go in a question's `config`**,
-because `config` is sent to every phone (map_pin's `imageId` + dimensions live there; its
-target lives in `answer_data`). Image IDs are therefore public too, which is fine. Correct answers only go out as `_answer_reveal` in
+because `config` is sent to every phone (map_pin's `imageId` + dimensions, and T8's
+`promptImageId` / `optionImageIds`, live there; answers live in `answer_data`). Image IDs
+are therefore public too, which is fine. So is alt text (`imageAlt`, T8): the editor warns
+authors not to name the answer in it. Correct answers only go out as `_answer_reveal` in
 `question_results` / `game_over`. Players never receive other players' names or scores, only
 their own points and rank. The host receives answer distributions and an anonymous score list.
 

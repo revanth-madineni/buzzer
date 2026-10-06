@@ -185,6 +185,8 @@ IDENTICAL_GROUPS = (
     (APPS, "src/lib/mapPin.ts"),
     (APPS, "src/components/MapCanvas.tsx"),
     (APPS, "src/lib/images.ts"),
+    (APPS, "src/components/AuthImage.tsx"),
+    (("host", "admin"), "src/components/ImagePicker.tsx"),
     (("player", "admin"), "src/theme.css"),
     (("host", "admin"), "src/components/ui/button.tsx"),
     (("host", "admin"), "src/components/ui/card.tsx"),

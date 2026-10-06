@@ -31,15 +31,24 @@ Routes are defined in `../App.tsx` (basename `/player/` in production):
   place/move a pin on `MapPinCanvas`, then **Confirm** (enabled once a pin exists, the image
   has loaded, and the question isn't locked or rejected). No auto-submit at time-up. After a
   timing rejection every branch clears `submitted`, disables input and shows "Not recorded —
-  time ran out".
+  time ran out". Image options (T8): if any `config.optionImageIds` entry is set, MC and
+  multi-select switch to a 2-column grid of square buttons (letter badge, then the image via
+  `AuthImage` or the option's text). An image button carries the description as its
+  `aria-label` ("Option B: <alt>", or "Option B, image" without alt text, from `imageAlt`), so
+  the inner `<img>` has `alt=""`; multi-select cells also set `aria-pressed`. Without image
+  options the original full-width list is unchanged. Prompt images are never shown here.
 - `game/FeedbackPage.tsx` — static "Answer locked in!" while waiting for the reveal.
 - `game/ResultsPage.tsx` — this question's outcome, your answer, points, total, and rank.
   map_pin: `MapPinCanvas` in reveal mode for both grading types, with a label computed from
   geometry (`mapPinDistance` vs the reveal): "No answer" (no pin, or `answerRejected`) /
   "Within target" / "Partial credit" / "Too far", plus "· full credit for answering" under
-  COMPLETENESS. The pin comes from `lastAnswerData`, else `sessionStorage`.
+  COMPLETENESS. The pin comes from `lastAnswerData`, else `sessionStorage`. For an MC image
+  option (T8), "You answered" shows the letter plus an `h-20` thumbnail instead of text.
 - `game/GameOverPage.tsx` — final rank/score plus a per-question recap (your answer vs.
-  correct; map_pin shows points earned / possible, no image). "Play Again" clears the token
+  correct; map_pin shows points earned / possible, no map image). For MC / multi-select
+  questions with image options (T8), your answer and the correct answer render as letters
+  with `h-12` thumbnails for image options (text after the letter otherwise; `OptionChoices`),
+  alt text from the summary's `imageAlt`. No prompt images. "Play Again" clears the token
   and goes to `/join`.
 
 ## How it fits in
@@ -70,7 +79,7 @@ machine are defined server-side in `backend/app/websocket/CLAUDE.md`.
 | server event | effect |
 |---|---|
 | `sync_state` | set count/lock; preload `imageIds`; if `LOBBY` → `/lobby`; if `IN_PROGRESS`, **no navigation** |
-| `game_images` (T7) | `preloadImages(imageIds)` |
+| `game_images` (T7) | `preloadImages(imageIds)`: maps and, since T8, option images (never prompt images) |
 | `new_question` | reset per-question state (incl. `answerRejected`) → `/question` |
 | `answer_received` | (unless `alreadyAnswered`) save an accepted map pin to `sessionStorage` `buzzer:pin:{code}:{questionId}`; → `/feedback` |
 | `question_locked` / `_unlocked` | toggle `questionLocked` |
@@ -109,18 +118,20 @@ Answer payloads sent: MC `{selectedIndex: number}`, T/F `{selectedValue: boolean
   advances.
 - `sync_state` only ever sets `questionLocked` to `true`, never back to `false`.
 - **The question prompt is never shown on the phone.** `QuestionPage` renders only options/input
-  (the prompt is on the host screen). `GameOverPage` does show prompts, as plain text, so
+  (the prompt is on the host screen); neither is a prompt image (T8), on any page. `GameOverPage` does show prompts, as plain text, so
   allowed `<b>/<i>/<u>/<br>` tags appear literally.
 - **"Correct" is judged client-side as `points > 0`** (ResultsPage and GameOverPage). The server's
   `isCorrect` (points == full value) is ignored, so partial credit shows as "Correct!". The
   `answer_received` payload's `isCorrect`/`pointsAwarded` are stored but not shown until the
   reveal.
-- ResultsPage shows "You answered" for MC/TF/fill-in but not multi-select, and shows the correct
-  answer only for fill-in. For multi-select, GameOverPage treats any option with `answerPoints > 0`
+- ResultsPage shows "You answered" for MC/TF/fill-in but not multi-select (so a multi-select
+  image answer gets no thumbnail there), and shows the correct answer only for fill-in. For multi-select, GameOverPage treats any option with `answerPoints > 0`
   as correct.
 - `QuestionPage` sets `submitted = true` before the server acknowledges. A timing rejection
   undoes it (`answerRejected`); any other rejection still leaves "submitted" and then shows
   the error screen.
+- **The T8 image options were never run in a browser.** No test runner; check the 2-column
+  grid, its screen-reader labels and the results/game-over thumbnails by hand on a phone.
 - **A map pin survives a reload only once accepted.** It's written to `sessionStorage` on
   `answer_received`, not on Confirm, so a rejected pin is never shown as yours.
 - `answer_time_ms` is measured from `QuestionPage` mount, not from server `started_at`, so late

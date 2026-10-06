@@ -21,18 +21,24 @@ rate limiter, and the request body size limit.
     - `require_course_host(course_id)` → `Course`;
     - `require_game_host(game_id)` → `Game` (checks `game.course_id`);
     - `require_question_host(game_id, question_id)` → `Question` (404 if it isn't in that game);
-    - `require_session_host(session_id)` → `GameSession` (checks `session.course_id`).
-- `exceptions.py` — `BuzzerError(code, message, status_code)` and subclasses `NotFoundError`
-  (404), `ForbiddenError` (403), `UnauthorizedError` (401), `ConflictError` (409).
-  `register_exception_handlers(app)` maps them to `{"error": code, "message": ...}`, validation
-  errors to 422 `{"error": "VALIDATION_ERROR", "detail": [...]}`, and anything else to a
-  generic 500 `INTERNAL_ERROR`.
+    - `require_session_host(session_id)` → `GameSession` (checks `session.course_id`);
+    - `require_image_host(image_id)` (T8) → `Image` (404 for unknown/malformed IDs; checks
+      HOST on `image.course_id`; a courseless image is 403 for non-admins).
+- `exceptions.py` — `BuzzerError(code, message, status_code, extra=None)` and subclasses
+  `NotFoundError` (404), `ForbiddenError` (403), `UnauthorizedError` (401), `ConflictError`
+  (409), `ImageInUseError` (409 `IMAGE_IN_USE` with `usage` + `hidden_usage_count`, T8).
+  `register_exception_handlers(app)` maps them to `{"error": code, "message": ...}` plus any
+  `extra` fields (never overriding those two), validation errors to 422 `{"error":
+  "VALIDATION_ERROR", "detail": [...]}`, a MySQL deadlock (`DBAPIError` errno 1213, T8) to
+  409 `CONFLICT` "The server was busy; please try again", and anything else to a generic
+  500 `INTERNAL_ERROR`.
 - `logging.py` — `configure_logging()`: structlog with console renderer + DEBUG in development,
   JSON + INFO otherwise; quiets `uvicorn.access` in production unless stress-test mode is on.
 - `body_limit.py` (T7) — `BodySizeLimitMiddleware`, a pure ASGI middleware taking
   `(method, path regex, max_bytes)` rules (first match wins; other requests untouched).
   Registered in `main.py`, inside CORS so a 413 still gets CORS headers:
-  - `POST ^/api/admin/images$` and `POST ^/api/host/courses/\d+/images$`: 2.5 MB;
+  - `POST ^/api/admin/images$`, `POST ^/api/host/courses/\d+/images$` and the T8 replace
+    routes `POST ^/api/{admin,host}/images/[^/]+/replace$`: 2.5 MB;
   - `POST ^/api/admin/games/import$`: 26 MB.
   A `Content-Length` over the limit gets 413 `{"error":"REQUEST_TOO_LARGE"}` without the body
   being read. Otherwise it wraps `receive` and counts bytes, so a chunked or understated body

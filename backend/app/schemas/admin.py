@@ -152,9 +152,55 @@ def is_valid_number(value: object) -> bool:
     )
 
 
+def is_image_ref(value: object) -> bool:
+    """A stored image reference: a non-empty string of at most 64 chars (T7/T8)."""
+    return isinstance(value, str) and 0 < len(value) <= MAP_PIN_MAX_IMAGE_ID
+
+
+def _validate_image_ref(value: object, key: str) -> None:
+    if not is_image_ref(value):
+        raise ValueError(f"{key} must be a non-empty string of at most 64 characters")
+
+
+def _validate_question_images(type_: str, config: dict) -> None:
+    """T8 §4.2: promptImageId on every type; optionImageIds on MC and multi-select."""
+    if "promptImageId" in config:
+        _validate_image_ref(config["promptImageId"], "config.promptImageId")
+    if "optionImageIds" not in config:
+        return
+    if type_ not in ("multiple_choice", "multi_select"):
+        raise ValueError(
+            "optionImageIds is only allowed on multiple_choice and multi_select"
+        )
+    ids = config["optionImageIds"]
+    options = config.get("options")
+    if (
+        not isinstance(ids, list)
+        or not isinstance(options, list)
+        or len(ids) != len(options)
+    ):
+        raise ValueError("optionImageIds must be a list the same length as options")
+    for i, image_id in enumerate(ids):
+        if image_id is not None:
+            _validate_image_ref(image_id, f"config.optionImageIds[{i}]")
+    if all(image_id is None for image_id in ids):
+        return  # treated exactly like an absent key
+    for i, (text, image_id) in enumerate(zip(options, ids, strict=True)):
+        if not isinstance(text, str):
+            raise ValueError(f"Option {i + 1} must be a string")  # noqa: TRY004 (pydantic needs ValueError)
+        if image_id is not None and text != "":
+            raise ValueError(
+                f"Option {i + 1} must have either text or an image, not both"
+            )
+        if image_id is None and not text.strip():
+            raise ValueError(
+                f"Option {i + 1} must have either text or an image, not neither"
+            )
+
+
 def _validate_map_pin(config: dict, answer_data: dict) -> None:
     """Same rules for both grading types: both show the same reveal (spec §4.5)."""
-    extra = set(config) - {"imageId", "imageWidth", "imageHeight"}
+    extra = set(config) - {"imageId", "imageWidth", "imageHeight", "promptImageId"}
     if extra:
         raise ValueError(f"map_pin config has unknown keys: {sorted(extra)}")
     image_id = config.get("imageId")
@@ -267,6 +313,7 @@ class QuestionCreate(BaseModel):
                     raise ValueError("answer_points values must be numbers")
         if self.type == "map_pin":
             _validate_map_pin(self.config, self.answer_data)
+        _validate_question_images(self.type, self.config)
         return self
 
 
@@ -295,6 +342,9 @@ class QuestionResponse(BaseModel):
     points_value: float
     order_index: int
     created_at: datetime
+    # T8: {image_id: alt_text} for the question's existing images. Not an ORM
+    # attribute; built by question_service.question_responses.
+    image_alt: dict[str, str] = Field(default_factory=dict)
 
 
 class QuestionReorder(BaseModel):
@@ -307,6 +357,9 @@ class QuestionReorder(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+ALT_TEXT_MAX = 250
+
+
 class ImageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
@@ -315,6 +368,35 @@ class ImageResponse(BaseModel):
     height: int
     byte_size: int
     sha256: str
+    alt_text: str
+    course_id: int | None
+    created_at: datetime
+
+
+class ImageUsage(BaseModel):
+    """One use of an image: one entry per question **and** role (T8 §4.2)."""
+
+    game_id: int
+    game_title: str
+    course_id: int | None
+    question_id: int
+    question_number: int  # 1-based position in the game, not order_index + 1
+    role: Literal["map", "prompt", "option"]
+
+
+class ImageListItem(ImageResponse):
+    usage: list[ImageUsage]
+    hidden_usage_count: int  # uses in games the caller can't use; always 0 for admins
+
+
+class ImageAltUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    alt_text: str = Field(..., max_length=ALT_TEXT_MAX)
+
+    @field_validator("alt_text")
+    @classmethod
+    def strip_alt(cls, v: str) -> str:
+        return v.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +486,9 @@ class GameMoveResult(BaseModel):
     applied: bool
     game: GameResponse
     dropped_grants: list[GameAccessEntry]
+    # T8 §4.7a: images re-tagged to the new course / copied because they're shared.
+    images_moved: int = 0
+    images_copied: int = 0
 
 
 # ---------------------------------------------------------------------------

@@ -43,7 +43,14 @@ export interface MapPinAnswer {
 export interface QuestionConfig extends Partial<MapPinConfig> {
   options?: string[];
   maxLength?: number;
+  /** T8: one image shown with the prompt (projector only); any question type. */
+  promptImageId?: string;
+  /** T8: multiple_choice / multi_select only; same length as `options`, null = text option. */
+  optionImageIds?: (string | null)[];
 }
+
+/** T8: image ID → alt text, for every image the question references; omitted when none. */
+export type ImageAltMap = Record<string, string>;
 
 export interface PlayerJoinedPayload {
   playerCount: number;
@@ -58,6 +65,7 @@ export interface QuestionPayload {
   config: QuestionConfig;
   timeLimitSeconds: number;
   pointsValue: number;
+  imageAlt?: ImageAltMap;
 }
 
 export interface AnswerResultPayload {
@@ -108,6 +116,7 @@ export interface QuestionSummaryItem {
   answerTimeMs: number | null;
   playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[]; x?: number; y?: number } | null;
   answerReveal: PlayerAnswerReveal;
+  imageAlt?: ImageAltMap;
 }
 
 export interface PlayerGameOverPayload {

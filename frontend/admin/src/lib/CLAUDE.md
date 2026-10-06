@@ -15,7 +15,8 @@ There is no socket code and no role logic here. The admin app never opens a sock
     with `Content-Type: application/json`. An empty response body (the many 204s) resolves to
     `{}`.
   - `api.postForm<T>(path, form: FormData)` — multipart POST with **no** `Content-Type`, so
-    the browser sets the boundary. Used for the game JSON import and map-pin image upload.
+    the browser sets the boundary. Used for the game JSON import and image upload and replace
+    (map pin since T7; since T8 also `ImagesPage` and the editor's `ImagePicker` upload).
   - `api.download(path)` — GET, reads the filename from `Content-Disposition:
     filename="…"` (falls back to `download`), wraps the body in a Blob, and clicks a temporary
     `<a download>`. Used for CSV/JSON/HTML exports.
@@ -28,7 +29,8 @@ There is no socket code and no role logic here. The admin app never opens a sock
   `<html data-theme-key>` in `index.html`.
 - `images.ts` (T7) — `loadImage` / `preloadImages`: images fetched with the Bearer token as
   blob URLs, promise cached per ID, failures evicted, one shared `POST /api/auth/refresh` +
-  retry on a 401. Byte-identical to the other apps' copies.
+  retry on a 401. Byte-identical to the other apps' copies. Since T8 its main consumer is
+  `components/AuthImage` (every image thumbnail), besides `MapCanvas`.
 
 ## How it fits in
 Consumers (all under `pages/`), grouped by the backend guard (see
@@ -40,13 +42,14 @@ dependencies):
 |---|---|
 | `CoursesPage` | `GET/POST /admin/courses`, `PUT /admin/courses/{id}` (incl. `allow_guests`) |
 | `AccessPage` | `GET /admin/courses`, `GET /admin/users`, `GET /admin/courses/{id}/access`, `POST/DELETE /admin/users/{uid}/course-access[/{cid}]`, `GET /admin/games`, `PUT /admin/games/{id}` (`restricted`), `GET /admin/games/{id}/access`, `POST/DELETE /admin/users/{uid}/game-access[/{gid}]`, plus `MoveGamePanel` |
-| `components/MoveGamePanel` | `POST /admin/games/{id}/move` (`confirm=false`, then `true`) |
+| `components/MoveGamePanel` | `POST /admin/games/{id}/move` (`confirm=false`, then `true`; the preview also returns T8's `images_moved` / `images_copied`) |
 | `RosterPage` | `GET /admin/courses/{id}/roster`, `POST .../roster/import` (JSON `{rows}`, parsed client-side), `PATCH .../roster/{entryId}` |
 | `UsersPage` | `GET/POST /admin/users` |
 | `UserDetailPage` | `GET/PUT/DELETE /admin/users/{id}`, `POST`/`DELETE .../course-access[/{courseId}]`, `POST`/`DELETE .../game-access[/{gameId}]`, plus `GET /admin/courses` and `/admin/games` for the pickers |
 | `GuestsPage` | `GET /admin/users/guests`, `POST /admin/users/merge-guest`, `DELETE /admin/users/{id}` |
 | `GamesPage` | `GET/POST /admin/games` (with `course_id`), `GET /admin/courses`, `PUT`/`DELETE /admin/games/{id}`, `postForm /admin/games/import` (`file` + `course_id`), plus `MoveGamePanel` |
-| `QuestionEditorPage` | `GET /admin/games/{id}`, `GET/POST .../questions`, `PUT`/`DELETE .../questions/{qid}`, `POST .../questions/reorder`, `download .../export`, `postForm /admin/images` (T7, with the game's `course_id`); `GET /images/{id}` via `lib/images.ts` |
+| `QuestionEditorPage` | `GET /admin/games/{id}`, `GET/POST .../questions`, `PUT`/`DELETE .../questions/{qid}`, `POST .../questions/reorder`, `download .../export`, `postForm /admin/images` (T7, with the game's `course_id`; T8 adds `alt_text`), `GET /admin/images?course_id=` or `?unassigned=true` (T8, for `ImagePicker`); `GET /images/{id}` via `lib/images.ts` |
+| `ImagesPage` (T8) | `GET /admin/courses`, `GET /admin/images` (all, `?course_id=` or `?unassigned=true`), `postForm /admin/images` (`file`, `alt_text`, optional `course_id`), `PATCH /admin/images/{id}` (`alt_text`), `postForm /admin/images/{id}/replace`, `DELETE /admin/images/{id}`; `GET /images/{id}` via `lib/images.ts` |
 | `SessionsPage` | `GET /admin/sessions[?status=]`, `download /admin/sessions/{id}/export?…` (raw or Canvas CSV), `download .../report` (HTML) |
 
 **Not under `/admin`:**

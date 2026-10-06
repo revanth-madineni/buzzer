@@ -30,7 +30,8 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
 - `manage/*` — the per-course management area (T4), rendered inside `App.tsx`'s `HostLayout`
   at `/courses/:courseId/…`. `:courseId` is only for navigation. Game, question and session
   calls use the flat `/host/games/…` and `/host/sessions/…` URLs, so the server checks the
-  resource's own course.
+  resource's own course. Images (T8) are listed and uploaded per course
+  (`/host/courses/{id}/images`) and edited flat (`/host/images/{id}`).
   - `manage/GamesPage.tsx` — `.../games`: the course's games (`GET /host/courses/{id}/games`)
     with question count and a read-only **Restricted** badge. Create (`POST`, lands in this
     course, unrestricted), edit title/description/max players (`PUT /host/games/{id}`), and
@@ -40,17 +41,32 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
     admin app's `QuestionEditorPage`**, pointed at `/host/games/{id}/questions…`, with
     "Back" → this course's games and no JSON export (hosts have no export endpoint). The form
     logic (`FormState`, `formToPayload`, the `points_value` derivation) must be kept in step
-    with the admin copy by hand. Map pin (T7): image upload to
-    `/host/courses/{courseId}/images` (the only difference from the admin copy's
-    `uploadImage`), click/drag the image to set the target, radius number inputs (source of
+    with the admin copy by hand. Map pin (T7): image upload (or, since T8, "Choose from
+    images"), click/drag the image to set the target, radius number inputs (source of
     truth, 0.02–2) paired with 0.02–0.5 sliders, a warning below 0.04, and saving blocked
     without an image and target for both grading types. Map pin questions take an entered
     points value. "Replace image" uploads a new one; the target fractions are kept.
+    Images (T8) work as in the admin copy (`frontend/admin/src/pages/CLAUDE.md`): a prompt
+    image on every type, text-or-image options on multiple_choice / multi_select
+    (`config.optionImageIds` parallel to `options`, `""` text for image options), the
+    `ImagePicker` for choosing/uploading with alt text, and alt text from
+    `QuestionResponse.image_alt`. The only difference from the admin copy's
+    `listImages` / `uploadImage`: both use `/host/courses/{course}/images` with the **game's
+    own `course_id`** (from `GET /host/games/{id}`), never the `:courseId` route param; for a
+    courseless game they throw "This game has no course, so it has no images".
   - `manage/RosterPage.tsx` — `.../roster`: active/inactive tables
     (`GET /host/courses/{id}/roster`). Upload of the **Canvas gradebook CSV** only (no
     column-mapping wizard; that's admin-only), with mode "Add / update only" (default,
     `add_update`) or "Replace roster" (`replace`, behind a browser confirm). It shows the
     added/updated/deactivated counts and the parser's `errors`.
+  - `manage/ImagesPage.tsx` — `.../images` (T8): an adapted copy of the admin `ImagesPage`
+    without the course filter or course badges. Lists and uploads (file + alt text) via
+    `GET/POST /host/courses/{courseId}/images` (the route param, here); each card has the
+    thumbnail (click → full-size overlay), size and date, inline alt-text edit
+    (`PATCH /host/images/{id}`), **Used by** (links to each question editor under that game's
+    own course, plus "+ N in games you can't access" from `hidden_usage_count`), **Replace**
+    (`POST /host/images/{id}/replace`, with an "updates N question(s) in M game(s)" confirm)
+    and **Delete** (disabled while in use; a 409 race reloads and shows the message).
   - `manage/SessionsPage.tsx` — `.../sessions`: COMPLETED sessions of the course, any host
     (`?status=COMPLETED`), with "Download scores (CSV)" and "Download summary (HTML)"
     (`api.download` of `/host/sessions/{id}/export|report`).
@@ -58,15 +74,19 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
   `GET /game/rooms/{code}` (failure ignored), opens the socket with `auth: {token}`, emits
   `join_room {room_code, role: "HOST"}` on **every** `connect`, maps server events to state and
   navigation, and exposes `useGame()` (phase, players, currentQuestion, answer counts, lock
-  state, results, gameOver, `autoAdvance`, `emitAdvance`, `emitLockQuestion`). Preloads map
-  images on `game_images` (T7). Always renders a corner QR code + room code and the theme
+  state, results, gameOver, `autoAdvance`, `emitAdvance`, `emitLockQuestion`). Preloads
+  images on `game_images` (T7). Since T8 the host receives it twice at game start: the room
+  broadcast (the players' set: maps and option images) and a host-only one that adds the
+  prompt images; `lib/images.ts` caches per ID, so the overlap is fetched once. Always renders a corner QR code + room code and the theme
   toggle. Any `error` event replaces the page with a message and "Back to Home". Both returns
   are wrapped in the T9 stage, `<div data-stage className="contents">` (see "The stage" below).
 - `game/LobbyPage.tsx` — big QR code (`{origin}/player/join?code=…`), room code, player count,
   the auto-advance toggle, and "Start Game" (`host_advance`; disabled at 0 players).
 - `game/QuestionPage.tsx` — question header (number, type, Accuracy/Participation, typo
   tolerance), `TimerBar`, prompt (hidden while locked; for map_pin **only** the prompt, the
-  map is on the phones), `answered / players` count, a
+  map is on the phones), (T8) the prompt image under it via `AuthImage` (`max-h-[45vh]`,
+  alt from `imageAlt`, also hidden while locked; option images are not shown here, only on
+  the phones), `answered / players` count, a
   "Lock/Unlock Question" toggle (`host_lock_question`), and "Show Results" (`host_advance`,
   always enabled). With auto-advance on, it advances 1.5 s after `answer_phase_ended`.
 - `game/ResultsPage.tsx` — per-question distribution: word cloud for fill-in-the-blank
@@ -74,14 +94,16 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
   `MapPinHeatmap` for map_pin (both grading types; COMPLETENESS adds a "Participation — full
   credit for answering" caption), otherwise a bar chart. Each bar row is the label, the bar
   (`chart-correct` for correct options, `chart-bar` otherwise; COMPLETENESS questions have no
-  right/wrong), the count and "✓ Correct" **beside** the bar, never inside it.
+  right/wrong), the count and "✓ Correct" **beside** the bar, never inside it. An image
+  option (T8) is labelled with its letter plus an `h-16` thumbnail instead of text.
   "Next Question" / "Show Final Results" (`host_advance`). With auto-advance on, a 10 s
   countdown then advances.
 - `game/GameOverPage.tsx` — anonymous score histogram (~8 buckets up to `maxPossibleScore`),
   average/high/player count, "New Game" (→ `/home`), and a per-question breakdown card
   (distribution, accepted answers, correct %, response rate, average answer time; for map_pin,
   "within target" % and average credit from the host summary, "—" when nobody answered, and
-  no image).
+  no map image). Since T8 a prompt image shows as a thumbnail beside the prompt and image
+  options as thumbnails in the distribution, with alt text from the summary's `imageAlt`.
 
 ## How it fits in
 Uses `lib/api.ts` + `lib/utils.ts` (see `lib/CLAUDE.md`) and `components/ui/*` (see
@@ -146,7 +168,7 @@ Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **glob
 | `question_results` | → `/results` |
 | `game_over` | → `/gameover` (socket stays connected) |
 | `game_abandoned` | → `/home` |
-| `game_images` (T7) | `preloadImages(imageIds)` |
+| `game_images` (T7) | `preloadImages(imageIds)`; arrives twice since T8 (player set, then host set incl. prompt images) |
 | `error` / `connect_error` | full-screen error view |
 
 ## Gotchas
@@ -182,9 +204,12 @@ Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **glob
 - **Error messages.** Since T4, `api.ts` shows the server's `message` (e.g. "You do not have
   HOST access to this course", "This game is being played right now"). The OAuth2 exchange
   path in `LoginPage` bypasses `api.ts` and still reads only `detail`.
-- **Refresh mid-game loses the preload.** `game_images` is sent once, at start, and the host's
-  `sync_state` has no `imageIds`, so after a reload the results heatmap loads its image on
-  demand ("Loading map…" briefly).
+- **Refresh mid-game loses the preload.** `game_images` is sent only at start, and the host's
+  `sync_state` has no `imageIds`, so after a reload the results heatmap and (T8) prompt and
+  option images load on demand (a blank `AuthImage` placeholder or "Loading map…" briefly).
+- **The T8 image UI was never run in a browser.** No test runner; the prompt image on the
+  projector, the results/game-over thumbnails, the editor's image fields and `ImagesPage`
+  need checking by hand.
 - **The game-over histogram assumes whole-number scores.** Since `maxPossibleScore` is no
   longer truncated, a fractional maximum (e.g. 8.75) gives slightly odd bucket labels
   ("8–8.75"), though the bucketing still works.

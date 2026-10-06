@@ -12,9 +12,11 @@ from ..common.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from ..database import get_db
 from ..models.course import Course
 from ..models.game import Game, Question
+from ..models.image import Image
 from ..models.session import GameSession
 from ..models.user import User
 from ..services import access_service as access
+from ..services import image_service
 from ..services.auth_service import decode_token, get_user_by_id
 
 logger = structlog.get_logger()
@@ -124,6 +126,23 @@ async def require_session_host(
     game = await db.get(Game, session.game_id)
     await access.assert_can_view_session_results(db, user, session, game)
     return session
+
+
+async def require_image_host(
+    image_id: str,
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Image:
+    """T8: HOST on the image's course. A courseless image is admin-only (403)."""
+    image = await image_service.get_image(db, image_id)
+    if image is None:
+        raise NotFoundError(f"Image {image_id} not found")
+    if user.role != "ADMIN" and (
+        image.course_id is None
+        or not await access.has_course_host(db, user, image.course_id)
+    ):
+        raise ForbiddenError(access.COURSE_HOST_REQUIRED)
+    return image
 
 
 async def get_refresh_token(

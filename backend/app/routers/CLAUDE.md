@@ -22,14 +22,18 @@ into `services/`. Live gameplay is **not** here — it runs over Socket.IO in `w
     carry one);
   - `restricted` on game update, and `allow_guests` on course create/update.
   Question endpoints are thin wrappers over `services/question_service.py`.
-  T7 added `POST /admin/images` and bundle version 2 for game import/export (below).
+  T7 added `POST /admin/images` and bundle version 2 for game import/export (below). T8
+  added `GET /admin/images?course_id=|unassigned=` (both → 422), `PATCH /admin/images/{id}`
+  (alt text), `DELETE /admin/images/{id}` (409 `IMAGE_IN_USE`) and
+  `POST /admin/images/{id}/replace` (201 with the **new** image; 30/min), and image counts
+  on the move result.
 - `host.py` — `/api/host/*` (T4): course-host management. Every endpoint uses a
   `require_*_host` dependency (see the table below), and URLs are flat (`/host/games/{id}`,
   not nested under a course).
 - `game.py` — `/api/game/*`: host resource discovery, room creation, room lookup, and
   per-session host tools (delete, guest list/merge, CSV export).
 - `images.py` (T7) — `GET /api/images/{image_id}`: the raw bytes of an uploaded image, for
-  any authenticated user. No list, update or delete endpoints in v1.
+  any authenticated user. Listing and managing images (T8) is in `admin.py` / `host.py`.
 
 ## How it fits in
 `main.py` includes these routers, then wraps the FastAPI app in a Socket.IO ASGI app so
@@ -61,7 +65,9 @@ Global roles from `common/` (`ADMIN | USER | GUEST`); course/game rules come fro
 | `GET/POST /host/games/{gid}/questions`, `POST …/reorder` | `require_game_host` | `question_service` |
 | `PUT/DELETE /host/games/{gid}/questions/{qid}` | `require_question_host` | 404 if the question isn't in that game |
 | `GET/POST /host/courses/{cid}/roster` | `require_course_host` | Canvas gradebook CSV only; `mode` `add_update` (default) or `replace` |
-| `POST /host/courses/{cid}/images` (T7) | `require_course_host` | multipart `file` → 201 `ImageResponse`; stores `course_id` from the URL; 30/min |
+| `POST /host/courses/{cid}/images` (T7) | `require_course_host` | multipart `file` (+ optional `alt_text`, T8) → 201 `ImageResponse`; stores `course_id` from the URL; 30/min |
+| `GET /host/courses/{cid}/images` (T8) | `require_course_host` | the course's images, newest first; `usage` only in games the caller can use, the rest counted in `hidden_usage_count` |
+| `PATCH/DELETE /host/images/{id}`, `POST …/replace` (T8) | `require_image_host` | HOST on the **image's** course (courseless → 403). Delete's 409 hides uses like the list; replace is 403 if any use is in a game the caller can't use |
 | `GET /host/courses/{cid}/sessions?status=` | `require_course_host` | sessions **played in** the course, any host; restricted games without a grant filtered in SQL |
 | `GET /host/sessions/{sid}/export`, `…/report` | `require_session_host` | CSV / HTML; 409 `SESSION_NOT_COMPLETED` unless COMPLETED |
 
@@ -97,22 +103,25 @@ Three kinds of host checks exist:
 - `/host/sessions/{id}/export|report` check **course HOST** on the session's course instead,
   so any co-host can download results, but a host who lost HOST cannot.
 
-### Images and bundles (T7)
+### Images and bundles (T7, T8)
 - **Upload** (`POST /admin/images` with optional `course_id` form field, 404 if missing;
-  `POST /host/courses/{cid}/images`): `@limiter.limit("30/minute")`, so the handler takes
-  `request: Request`. Calls `image_service.store_image` (always re-encoded). No live-game
-  guard, since it writes no game or question. Request size is bounded before parsing by
+  `POST /host/courses/{cid}/images`; both take an optional `alt_text` field, T8):
+  `@limiter.limit("30/minute")`, so the handler takes `request: Request`. Calls
+  `image_service.store_image` (always re-encoded). No live-game guard, since it writes no
+  game or question. Request size is bounded before parsing by
   `common/body_limit.py` (2.5 MB); `prepare_image`'s 2 MB is the per-file rule.
-- **Export** writes `"version": 2` with `images: [{id, mime_type, data(base64)}]`, each
-  distinct map-pin image once; questions keep their source `imageId`. 409
-  `EXPORT_IMAGE_MISSING` if an image row is gone.
+- **Export** writes `"version": 2` with `images: [{id, mime_type, alt_text, data(base64)}]`,
+  each distinct image of every role once (`game_image_ids(…, "host")`, T8); questions keep
+  their source IDs. 409 `EXPORT_IMAGE_MISSING` if an image row is gone.
 - **Import** reads v1 and v2 (body limit 26 MB, then a 25 MB check → 422). Before any insert:
   v1 may not contain `images`; v2 has at most 50 entries with unique string ids (any string,
-  e.g. `"map1"`; extra keys ignored); every map_pin question must reference a bundle image
-  (server images aren't allowed, so bundles stay self-contained); only referenced images are
-  base64-decoded and run through `prepare_image(force_reencode=False)`. Then, in one
-  transaction: images get new UUIDs, questions are re-pointed and take their dimensions from
-  the prepared images (import doesn't call `resolve_map_pin_image`).
+  e.g. `"map1"`; extra keys ignored; optional `alt_text` string ≤ 250, T8); every image a
+  question references, in any role, must be in the bundle (server images aren't allowed, so
+  bundles stay self-contained; a v1 question with image keys therefore fails); only
+  referenced images are base64-decoded and run through `prepare_image(force_reencode=False)`.
+  Then, in one transaction: images get new UUIDs and the import's `course_id`, every role is
+  re-pointed, and map questions take their dimensions from the prepared images (import
+  doesn't call `resolve_question_images`).
 
 ### Auth flows (`auth.py`)
 - `POST /auth/login` (5 per 15 min): `username`+`password` → access token + refresh cookie.
@@ -167,7 +176,8 @@ Three kinds of host checks exist:
   IN_PROGRESS session with a Redis room (see `services/CLAUDE.md`):
   - question create/update/delete/reorder (admin and host);
   - host game update/delete;
-  - admin move.
+  - admin move;
+  - image replace (T8), for every game that uses the image.
   Admin game delete is deliberately exempt. Any new endpoint that writes a game or its
   questions must call `game_service.lock_game` + `assert_not_live` first.
 - `list_sessions` (admin) and `my_active_sessions` do N+1 queries per session.

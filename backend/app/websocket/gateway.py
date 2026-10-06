@@ -29,7 +29,7 @@ from ..database import AsyncSessionLocal
 from ..models.game import Question
 from ..models.session import GameSession
 from ..redis_client import get_redis
-from ..services import game_service
+from ..services import game_service, image_service
 from ..services import state_service as state
 from ..services.auth_service import get_user_by_id
 from . import events as E
@@ -99,8 +99,16 @@ def _user_room(user_id: str) -> str:
     return f"user:{user_id}"
 
 
-def _question_payload(q: Question, number: int, total: int) -> dict:
-    """Build the client-safe NEW_QUESTION payload (no answer_data)."""
+async def image_alt_map(db, ids: set[str]) -> dict[str, str]:
+    """{image_id: alt_text} for the images that exist (T8 §4.8)."""
+    meta = await image_service.get_images_meta(db, ids)
+    return {i: image.alt_text for i, image in meta.items()}
+
+
+async def _question_payload(db, q: Question, number: int, total: int) -> dict:
+    """Build the client-safe NEW_QUESTION payload (no answer_data). Every question
+    sent to a client goes through here (T8 §4.8), so `imageAlt` is always present
+    for a question with images."""
     payload: dict = {
         "questionId": q.id,
         "type": q.type,
@@ -118,6 +126,10 @@ def _question_payload(q: Question, number: int, total: int) -> dict:
     }
     if q.type == "fill_in_the_blank":
         payload["editDistance"] = q.answer_data.get("editDistance", 0)
+    image_ids = {i for i, _ in game_service.question_image_ids(q.type, q.config)}
+    if image_ids:
+        # Alt text is public by design (spec §3); the editor warns authors.
+        payload["imageAlt"] = await image_alt_map(db, image_ids)
     return payload
 
 
@@ -128,8 +140,8 @@ async def _host_question_payload(db, current_q: dict | None) -> dict | None:
     question = await db.get(Question, current_q["question_id"])
     if not question:
         return None
-    payload = _question_payload(
-        question, current_q["question_number"], current_q["total_questions"]
+    payload = await _question_payload(
+        db, question, current_q["question_number"], current_q["total_questions"]
     )
     payload["startedAt"] = current_q[
         "started_at"
@@ -176,7 +188,9 @@ async def _player_image_ids(db, session: GameSession) -> dict:
     editable); `game_images` at start is final."""
     if session.status not in ("LOBBY", "IN_PROGRESS"):
         return {}
-    return {"imageIds": await game_service.get_game_image_ids(db, session.game_id)}
+    return {
+        "imageIds": await game_service.get_game_image_ids(db, session.game_id, "player")
+    }
 
 
 async def _emit_error(sid: str, message: str, code: str | None = None) -> None:
@@ -660,7 +674,8 @@ async def on_join_room(sid: str, data: dict) -> None:
                         (datetime.now(timezone.utc) - started_at).total_seconds()
                     )
                     remaining = max(5, current_q["time_limit_seconds"] - elapsed)
-                    payload = _question_payload(
+                    payload = await _question_payload(
+                        db,
                         question,
                         current_q["question_number"],
                         current_q["total_questions"],
@@ -962,12 +977,18 @@ async def _on_host_advance_impl(sid: str) -> None:
                 question_ids = [q.id for q in questions]
                 room_state["question_ids"] = question_ids
                 next_index = 0
-                # Before the first NEW_QUESTION, so phones start fetching maps now.
-                # Edits are locked once IN_PROGRESS, so this list is final.
+                # Before the first NEW_QUESTION, so phones start fetching images now.
+                # Edits are locked once IN_PROGRESS, so these lists are final. Phones
+                # never show prompts; the host also gets the prompt images (T8 §4.8).
                 await sio.emit(
                     E.GAME_IMAGES,
-                    {"imageIds": game_service.game_image_ids(questions)},
+                    {"imageIds": game_service.game_image_ids(questions, "player")},
                     to=room_code,
+                )
+                await sio.emit(
+                    E.GAME_IMAGES,
+                    {"imageIds": game_service.game_image_ids(questions, "host")},
+                    to=_host_room(room_code),
                 )
 
             if next_index >= len(question_ids):
@@ -1059,7 +1080,9 @@ async def _on_host_advance_impl(sid: str) -> None:
                 len(question_ids),
             )
 
-            payload = _question_payload(question, next_index + 1, len(question_ids))
+            payload = await _question_payload(
+                db, question, next_index + 1, len(question_ids)
+            )
             _t_emit = datetime.now(timezone.utc)
             await sio.emit(E.NEW_QUESTION, payload, to=room_code)
 

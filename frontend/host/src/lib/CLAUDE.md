@@ -27,6 +27,8 @@ logic here. The Socket.IO client is created in `pages/game/GameLayout.tsx`.
 - `images.ts` (T7) — `loadImage` / `preloadImages`: images fetched with the Bearer token as
   blob URLs (an `<img src>` would 401), the promise cached per ID, failures evicted, and one
   shared `POST /api/auth/refresh` + retry on a 401. Byte-identical to the other apps' copies.
+  Since T8 it also backs every `components/AuthImage`, and its per-ID cache is what dedupes
+  the two `game_images` events the host gets at game start.
 
 ## How it fits in
 Consumers, and the backend guard on each call (see `backend/app/routers/CLAUDE.md` for the
@@ -44,8 +46,9 @@ full access map and `backend/app/common/CLAUDE.md` for the role dependencies):
 | `App.tsx` (`HostLayout`) | `GET /game/my-courses` | as above |
 | `pages/manage/GamesPage.tsx` | `GET/POST /host/courses/{cid}/games`, `PUT/DELETE /host/games/{gid}` | `require_course_host` / `require_game_host` |
 | `pages/manage/QuestionEditorPage.tsx` | `GET /host/games/{gid}`, `GET/POST .../questions`, `PUT/DELETE .../questions/{qid}`, `POST .../questions/reorder` | `require_game_host` / `require_question_host`; writes 409 `GAME_LIVE` during a game |
-| `pages/manage/QuestionEditorPage.tsx` | `postForm /host/courses/{cid}/images` (map-pin image upload, T7) | `require_course_host` |
-| `lib/images.ts` (via `components/MapCanvas`) | `GET /images/{id}`, and `POST /auth/refresh` once on a 401 | `get_current_user` |
+| `pages/manage/QuestionEditorPage.tsx` | `postForm /host/courses/{cid}/images` (image upload: map pin since T7, plus `alt_text` and prompt/option images since T8) and `GET` same path (T8, `ImagePicker` list); `cid` is the **game's** `course_id`, not the route's | `require_course_host` |
+| `pages/manage/ImagesPage.tsx` (T8) | `GET/POST /host/courses/{cid}/images` (route `cid`), `PATCH/DELETE /host/images/{id}`, `postForm /host/images/{id}/replace` | `require_course_host` / `require_image_host`; replace 409 `GAME_LIVE` during a game |
+| `lib/images.ts` (via `components/MapCanvas`, `components/AuthImage`) | `GET /images/{id}`, and `POST /auth/refresh` once on a 401 | `get_current_user` |
 | `pages/manage/RosterPage.tsx` | `GET /host/courses/{cid}/roster`, `postForm` same path (`file`, `mode`) | `require_course_host` |
 | `pages/manage/SessionsPage.tsx` | `GET /host/courses/{cid}/sessions?status=COMPLETED`, `download /host/sessions/{sid}/export\|report` | `require_course_host` / `require_session_host` |
 

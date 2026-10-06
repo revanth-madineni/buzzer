@@ -2,10 +2,11 @@
 
 ## Purpose
 Presentational building blocks for the host (big-screen) app: three shadcn-style primitives
-and the per-question countdown bar (under `ui/`), the theme toggle (T9), plus the map canvas
-and results heatmap (T7). Everything is styled with the theme tokens, so it works in both the
+and the per-question countdown bar (under `ui/`), the theme toggle (T9), the map canvas
+and results heatmap (T7), plus the uploaded-image view and picker (T8). Everything is styled with the theme tokens, so it works in both the
 light and dark themes (`../CLAUDE.md`, `frontend/CLAUDE.md` "Theme system"). No socket access,
-game state, or role/course logic here; the map canvas loads its image through `lib/images.ts`.
+game state, or role/course logic here; the map canvas and `AuthImage` load images through
+`lib/images.ts`, and `ImagePicker` gets its list/upload calls from the caller.
 
 ## Contents
 - `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default` accent fill,
@@ -32,6 +33,19 @@ game state, or role/course logic here; the map canvas loads its image through `l
   dot per distribution key `"bx,by"` at the cell centre `((bx + 0.5) / 50, (by + 0.5) / 50)`
   with radius ∝ √count (so area grows with count), then the target and both radius circles on
   top. Same view for both grading types. Dots are `mapColor('heat', 0.55)` (`lib/mapPin.ts`).
+- `AuthImage.tsx` (T8) — **byte-identical in all three apps**. Renders an uploaded image by
+  ID through `lib/images.ts` (Bearer header, blob URL, shared cache, so a preloaded image
+  renders at once), always `object-contain` (never crops). While loading: an empty
+  `surface-alt` box (screen-reader "Loading image…"); on failure: "Image unavailable". Size
+  comes from `className`.
+- `ImagePicker.tsx` (T8) — **byte-identical to the admin app's** (checked by
+  `scripts/check_theme.py`). A `surface-alt` panel with a 3-column grid of the course's images
+  (thumbnail + alt text or "No description"; click to pick) and an upload form (PNG/JPEG/WebP
+  up to 2 MB + alt text, "Upload and use"). The caller passes `listImages` / `uploadImage`,
+  because the endpoints differ per app. It also exports the image types (`ImageInfo`,
+  `ImageUsage`, `ImageListItem`), the alt-text constants (`ALT_TEXT_HINT`, `ALT_TEXT_MISSING`,
+  `ALT_TEXT_MAX` = 250), `IMAGE_ACCEPT`, `FILE_INPUT_CLASS` and `AltTextHint` (hint plus a
+  non-blocking empty-alt warning).
 - `ThemeToggle.tsx` (T9) — **byte-identical in all three apps**. A 44×44 `<button>` using
   `useTheme()` (`lib/theme.ts`); its icon, `title`, `aria-label` and optional visible label
   (`showLabel`) all name the theme it switches **to** ("Switch to light theme"). `className`
@@ -53,6 +67,10 @@ game state, or role/course logic here; the map canvas loads its image through `l
   both returns of `game/GameLayout` (fixed top-right).
 - `pages/game/ResultsPage.tsx` uses `MapPinHeatmap`; `pages/manage/QuestionEditorPage.tsx`
   uses `MapCanvas` directly (`heightCap={0.7}`) to place the target.
+- `AuthImage` (T8) is used by `game/QuestionPage` (prompt image, `max-h-[45vh]`),
+  `game/ResultsPage` and `game/GameOverPage` (thumbnails), and by `ImagePicker`,
+  `manage/ImagesPage` and `manage/QuestionEditorPage`. The last two also import
+  `ImagePicker`'s types and alt-text helpers; the editor opens the picker itself.
 - The heatmap's 50-cell grid must match `game_service.map_pin_bucket` on the server.
 
 ## Gotchas
@@ -82,6 +100,7 @@ game state, or role/course logic here; the map canvas loads its image through `l
   never a filled button.
 - **These are copies, not shared code.** They differ from `frontend/player/src/components/ui/`:
   host sizing is tuned for a projector (tighter button/input padding, bigger timer bar and
-  label), and only the host `TimerBar` has `initialSeconds`. `ui/{button,card,input}.tsx` are
-  byte-identical to the admin app's (checked by `scripts/check_theme.py`), so edit one and copy
-  it. A fix to the player copy doesn't propagate.
+  label), and only the host `TimerBar` has `initialSeconds`. `ui/{button,card,input}.tsx` and
+  (T8) `ImagePicker.tsx` are byte-identical to the admin app's, and `AuthImage.tsx`,
+  `MapCanvas.tsx` and `ThemeToggle.tsx` to both other apps' (all checked by
+  `scripts/check_theme.py`), so edit one and copy it. A fix to the player copy doesn't propagate.

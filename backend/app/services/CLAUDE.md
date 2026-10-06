@@ -58,11 +58,17 @@ transaction, with the exceptions noted below.
       types;
     - `map_pin_stats(config, answer_data, answers)` → `withinFullPct` / `averageCredit` from
       geometry, `None` when no answer has a valid `{x, y}`;
-    - `game_image_ids(questions)` / `get_game_image_ids(db, game_id)`: distinct image IDs in
-      question order, for preloading on phones.
+  - **Image references (T8).** `question_image_ids(type, config)` → every `(image_id, role)`
+    (`map` = map_pin `imageId`, `prompt` = `promptImageId`, `option` = non-null
+    `optionImageIds`), in that order; malformed values ignored. **The one place** that knows
+    which config keys hold images. `repoint_config` rewrites every reference to one ID (new
+    dict/list). `game_image_ids(questions, audience)` / `get_game_image_ids(db, game_id,
+    audience)`: distinct IDs in question order; `"player"` leaves out prompt images (phones
+    never show prompts), `"host"` includes all.
   - Summaries: `get_leaderboard` (MySQL sum per user_id), `get_player_question_summary`,
-    `get_host_question_summary` (both include an `answerReveal` per question; the host one
-    adds `withinFullPct` / `averageCredit` for map_pin).
+    `get_host_question_summary` (both include an `answerReveal` per question, and `imageAlt`
+    for questions with images (T8); the host one adds `withinFullPct` / `averageCredit` for
+    map_pin).
 - `state_service.py` — Redis live state. Keys: `room:{code}` (JSON, 90-min TTL),
   `session:{id}:players` (set), `session:{id}:player:{uid}` (JSON incl. score, `is_connected`),
   `session:{id}:question` (current question + `started_at`), `session:{id}:answered:{qid}`
@@ -90,8 +96,28 @@ transaction, with the exceptions noted below.
   - Invariant: its output is clean, so `prepare_image(out.data, force_reencode=False)` returns
     the same bytes. That's what makes export → import byte-identical; unit tests per format.
   - `store_image` (uploads: always re-encoded), `store_prepared` (import: prepared during
-    validation, stored at insert), `get_image` / `get_image_with_data` (malformed IDs → `None`
-    without a query), `get_images_meta(ids)` (one `IN` query, no bytes). Flush only.
+    validation, stored at insert; both take `alt_text`), `get_image` / `get_image_with_data`
+    (malformed IDs → `None` without a query), `get_images_meta(ids)` (one `IN` query, no
+    bytes). Flush only.
+  - **Management (T8, spec `docs/plans/t8-images.md` §4.6–§4.7a):**
+    - `image_usage(db, ids, *, lock)` → `ImageUsage` dicts per image. A `LIKE '%imageid%'`
+      pre-filter on `CAST(config AS CHAR)` (can't miss: all three keys contain it), then
+      `question_image_ids`; `question_number` is the position in the game. `lock=True` is
+      `FOR SHARE OF questions` (question rows only, never the joined game rows).
+      `visible_usage` splits uses into those in games the caller `can_use_game` and a hidden
+      count. `list_images` builds the Images lists.
+    - `lock_images(ids, read=)` — `FOR SHARE` / `FOR UPDATE`, ascending id.
+    - `delete_image` — image `FOR UPDATE`, locking usage scan, 409 `IMAGE_IN_USE`
+      (`ImageInUseError`) if used. No game lock.
+    - `replace_image` — prepare first (no locks), unlocked scan → `lock_game` +
+      `assert_not_live` for each affected game (ascending), image `FOR UPDATE`, locking scan
+      (a new game → 409 `CONFLICT`), host: 403 if any use is in a game they can't use, map
+      uses: 422 `IMAGE_ASPECT_MISMATCH` beyond 1 %, then a new row (same course; old alt
+      text unless given) and every use re-pointed (map uses get new dimensions).
+    - `rehome_game_images(game, course, user, apply=)` — images follow a game: exclusive →
+      `course_id` re-tagged; shared with another game → copied (same bytes, new ID) and this
+      game re-pointed. `apply=False` only counts (move preview). Called by the admin move
+      and by `create_room`'s first-room attach.
 - `question_service.py` — Question authoring shared by the admin router (and the host router,
   T4):
   - `sanitize_prompt` (`bleach`, tags `b i br u`, no attributes). **Every** prompt write goes
@@ -100,9 +126,16 @@ transaction, with the exceptions noted below.
     (T7: overlays the PUT on the existing question's content fields, re-reads the row
     `FOR UPDATE`, and validates the merged result with `QuestionCreate`, see
     `schemas/CLAUDE.md`).
-  - `resolve_map_pin_image` (create and update, **not** import): 422 `IMAGE_NOT_FOUND` if the
-    image is missing, then overwrites `config.imageWidth/imageHeight` with the stored
-    dimensions, so scoring never needs a DB read.
+  - `resolve_question_images(db, body, game, user, previous_ids)` (create and update, **not**
+    import; T8): `FOR SHARE` on every referenced image (blocks a concurrent delete/replace),
+    422 `IMAGE_NOT_FOUND`, then for non-admins 422 `IMAGE_NOT_IN_COURSE` unless each ID
+    **new to the question** has `course_id == game.course_id`, then map_pin dimensions from
+    the stored image, so scoring never needs a DB read. Runs before the question row is
+    written. `question_responses(db, questions)` adds `image_alt` to `QuestionResponse`s.
+  - `create_question(db, game, body, user)` / `update_question(db, game, question, body,
+    user)` (T8 signatures). `update_question`'s re-read of the row is `FOR SHARE` (T8; the
+    game lock already serialises writers, and a shared lock can't deadlock an image delete's
+    scan).
   - `delete_question` (409 `QUESTION_HAS_ANSWERS` if any `SessionScore` references it), and
     `reorder_questions` (409 `CONFLICT` unless the IDs are exactly the game's question set).
   - Flush only. Every router write handler commits explicitly before it responds, because
@@ -110,10 +143,12 @@ transaction, with the exceptions noted below.
     take the live-game guard first.
 - `report_service.py` — `build_session_report` → standalone dark-theme HTML report with
   aggregate stats only (per-question distribution bar chart / word cloud, % correct, score
-  histogram). No player names. map_pin (T7): each distinct image is embedded **once** as a
-  data URI in a hidden SVG's `<defs>`; each question draws its own inline SVG (`<use>` +
-  heatmap dots from `map_pin_bucket` + both circles + target) and shows within-target % and
-  average credit.
+  histogram). No player names. Every image it **draws** (map, prompt, MC option; T7/T8) is
+  embedded **once** as a data URI in a hidden SVG's `<defs>` (`id="img-{id}"`) and drawn by
+  `<use>` with the alt text as `<title>`. map_pin: inline SVG + heatmap dots from
+  `map_pin_bucket` + both circles + target, within-target % and average credit. Prompt
+  images under the prompt; MC image options as bar-label thumbnails. Multi-select still
+  isn't rendered (and its option images aren't embedded).
 - `export_service.py` — `build_session_csv` (Player, Q1..Qn, Total) and `build_canvas_csv`
   (Canvas gradebook import format, SIS Login ID = netid [+ `@sis_domain`], optional
   per-question columns, `roster_only` flag).
@@ -201,6 +236,11 @@ There is no speed bonus; scores are float sums.
   test covers this (`tests/integration/test_host_management.py`).
 - Roster matching compares `user.netid` (as received from the OAuth2 header, not lowercased)
   with lowercased roster netids. This relies on MySQL's case-insensitive default collation.
+- **Image lock order (T8): game rows → image rows → question rows.** Saves: game, image
+  `FOR SHARE`, then the question write. Delete: image `FOR UPDATE`, then the question scan.
+  Replace/move: games, images, scan. The locking scan is a full-table `FOR SHARE OF
+  questions`, so two concurrent replaces/moves can still deadlock; `common/exceptions.py`
+  turns MySQL deadlocks (1213) into 409 `CONFLICT` "try again".
 - **Locking reads after the game-row lock.** MySQL runs at `REPEATABLE READ`, where a plain
   `SELECT` sees the snapshot from the transaction's *first* read. Both a guarded edit and
   `start_game` have read before they take the lock. So once a transaction holds the lock, every

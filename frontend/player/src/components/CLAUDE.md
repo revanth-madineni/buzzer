@@ -2,10 +2,10 @@
 
 ## Purpose
 Presentational building blocks for the player (mobile) app: three shadcn-style primitives
-and the per-question countdown bar (under `ui/`), the theme toggle (T9), plus the map-pin
-canvas (T7). Everything is styled with the theme tokens, so it works in both themes
-(`frontend/CLAUDE.md` "Theme system"). No socket access or game state here; the map canvas
-loads its image through `lib/images.ts`.
+and the per-question countdown bar (under `ui/`), the theme toggle (T9), the map-pin
+canvas (T7), plus the uploaded-image view `AuthImage` (T8). Everything is styled with the theme
+tokens, so it works in both themes (`frontend/CLAUDE.md` "Theme system"). No socket access or
+game state here; the map canvas and `AuthImage` load images through `lib/images.ts`.
 
 ## Contents
 - `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default` accent fill,
@@ -35,6 +35,11 @@ loads its image through `lib/images.ts`.
   the point. Reveal (`reveal`, `myPin`): target dot, solid `fullRadius` and dashed
   `zeroRadius` circles (r × drawW pixels), and the player's own pin. While `disabled`, the pin
   is drawn in `mapColor('pin-disabled')` (`lib/mapPin.ts`).
+- `AuthImage.tsx` (T8) — **byte-identical in all three apps**. Renders an uploaded image by
+  ID (`imageId`, `alt`, `className`) through `lib/images.ts` (Bearer header, blob URL, shared
+  cache, so an image preloaded from `game_images` renders at once), always `object-contain`
+  (never crops). While loading: an empty `surface-alt` box (screen-reader "Loading image…");
+  on failure: "Image unavailable".
 - `ThemeToggle.tsx` (T9) — **byte-identical in all three apps**. A 44×44 `<button>` using
   `useTheme()` (`lib/theme.ts`); its icon, `title`, `aria-label` and optional visible label
   all name the theme it switches **to**. `className` is for placement only.
@@ -46,6 +51,9 @@ loads its image through `lib/images.ts`.
   is what remounts it for each new question.
 - `lib/utils.ts` supplies `cn`. See `lib/CLAUDE.md`.
 - `QuestionPage`'s map_pin branch and `ResultsPage` use `MapPinCanvas`.
+- `AuthImage` (T8) is used by `QuestionPage` (image options in the 2-column grid, with
+  `alt=""` because the button carries the label), `ResultsPage` and `GameOverPage`
+  (thumbnails).
 - `ThemeToggle` is rendered by `JoinPage`, `NamePage` and the game's `LobbyPage`,
   `FeedbackPage`, `ResultsPage` and `GameOverPage`, never by `QuestionPage`
   (`pages/CLAUDE.md`).
@@ -72,7 +80,10 @@ loads its image through `lib/images.ts`.
   such as `bg-slate-800` compiles to nothing, with no error; run `scripts/check_theme.py`.
 - **No per-component focus styles.** Focus comes from the global `:focus-visible` outline in
   `../index.css`; don't add `focus:ring-*` or `outline-none`.
-- **The map canvas is untested in a browser by automation.** No test runner; verify pointer,
-  drag, DPR and Retry behaviour by hand on a phone after changing it.
+- **The map canvas and `AuthImage` are untested in a browser by automation.** No test runner;
+  verify pointer, drag, DPR and Retry behaviour, and image loading/placeholders, by hand on a
+  phone after changing them.
 - The primitives are copies local to the player app. The host and admin apps have their own
-  `components/`, so a style change here doesn't propagate.
+  `components/`, so a style change here doesn't propagate. `MapCanvas`, `AuthImage` and
+  `ThemeToggle` are the exceptions: byte-identical across all three apps (checked by
+  `scripts/check_theme.py`), so edit one and copy it.

@@ -6,18 +6,22 @@ Every name is unique per test (`tag = uuid4().hex[:8]`), as in conftest's
   1. DELETE /game/sessions/{id} for every room created — clears its Redis keys,
      so LOBBY rooms don't count toward MAX_ROOMS for 90 minutes;
   2. DELETE /admin/games/{id} for every game created;
-  3. DELETE /admin/users/{id} for every user created (their access rows cascade).
+  3. DELETE /admin/images/{id} for every image uploaded through `upload` (or
+     `track_image`), after the games, so they are unused by then (T8);
+  4. DELETE /admin/users/{id} for every user created (their access rows cascade).
 Courses and roster rows are left as inert records (no course-delete endpoint).
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import uuid
 from dataclasses import dataclass, field
 
 import httpx
 import pytest
+from PIL import Image
 
 from .engine.socket_client import TestSocketClient
 
@@ -45,6 +49,7 @@ class T4World:
     _games: list[int] = field(default_factory=list)
     _users: list[str] = field(default_factory=list)
     _sessions: list[str] = field(default_factory=list)
+    _images: list[str] = field(default_factory=list)
 
     # --- raw HTTP --------------------------------------------------------
 
@@ -92,6 +97,9 @@ class T4World:
 
     def track_game(self, game_id: int) -> None:
         self._games.append(game_id)
+
+    def track_image(self, image_id: str) -> None:
+        self._images.append(image_id)
 
     def get_game(self, game_id: int) -> dict:
         r = self.request("GET", f"/admin/games/{game_id}")
@@ -190,6 +198,8 @@ class T4World:
             self.delete_session(session_id)
         for game_id in self._games:
             self.request("DELETE", f"/admin/games/{game_id}")
+        for image_id in self._images:
+            self.request("DELETE", f"/admin/images/{image_id}")
         for user_id in self._users:
             self.request("DELETE", f"/admin/users/{user_id}")
 
@@ -199,6 +209,71 @@ def t4(docker_stack, base_url: str, admin_token: str):
     world = T4World(base_url, admin_token)
     yield world
     world.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Images (moved here from test_map_pin.py for T8; both suites use them)
+# ---------------------------------------------------------------------------
+
+
+def picture(size: tuple[int, int] = (80, 40), mode: str = "RGB") -> Image.Image:
+    img = Image.new(mode, size)
+    channels = len(img.getbands())
+    for x in range(size[0]):
+        for y in range(size[1]):
+            v = (x * 7 + y * 13) % 256
+            img.putpixel((x, y), (v, 255 - v, x % 256, 200)[:channels])
+    return img
+
+
+def encode(img: Image.Image, fmt: str, **kwargs) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, fmt, **kwargs)
+    return buf.getvalue()
+
+
+def png(size: tuple[int, int] = (80, 40)) -> bytes:
+    return encode(picture(size), "PNG")
+
+
+def upload(
+    t4: T4World,
+    data: bytes,
+    *,
+    token: str | None = None,
+    course_id: int | None = None,
+    host_course: int | None = None,
+    alt_text: str | None = None,
+    filename: str = "img.png",
+    content_type: str = "image/png",
+) -> httpx.Response:
+    """Admin upload by default; `host_course` uploads to that course's host route.
+    A successful upload is deleted at teardown."""
+    files = {"file": (filename, data, content_type)}
+    form: dict[str, str] = {}
+    if alt_text is not None:
+        form["alt_text"] = alt_text
+    if host_course is not None:
+        r = t4.request(
+            "POST",
+            f"/host/courses/{host_course}/images",
+            token,
+            files=files,
+            data=form or None,
+        )
+    else:
+        if course_id is not None:
+            form["course_id"] = str(course_id)
+        r = t4.request("POST", "/admin/images", token, files=files, data=form or None)
+    if r.status_code == 201:
+        t4.track_image(r.json()["id"])
+    return r
+
+
+def upload_ok(t4: T4World, data: bytes, **kwargs) -> dict:
+    r = upload(t4, data, **kwargs)
+    assert r.status_code == 201, r.text
+    return r.json()
 
 
 def assert_error(r: httpx.Response, status: int, code: str) -> None:

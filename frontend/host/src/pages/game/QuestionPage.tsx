@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { TimerBar } from '../../components/ui/TimerBar';
+import { AuthImage } from '../../components/AuthImage';
 
 export default function QuestionPage() {
   const { currentQuestion, answeredCount, playerCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, autoAdvance, emitAdvance, emitLockQuestion } = useGame();
@@ -33,6 +34,8 @@ export default function QuestionPage() {
     if (d === 1) return 'Up to 1 typo allowed';
     return `Up to ${d} typos allowed`;
   }
+
+  const promptImageId = currentQuestion.config.promptImageId;
 
   const remainingSeconds = questionLocked && lockedTimerSeconds !== null
     ? lockedTimerSeconds
@@ -76,6 +79,15 @@ export default function QuestionPage() {
         <h2 className="text-4xl font-bold text-fg text-center max-w-3xl leading-tight">
           {currentQuestion.prompt}
         </h2>
+      )}
+
+      {/* T8: the prompt image is projector-only; hidden while locked, like the prompt. */}
+      {!questionLocked && promptImageId && (
+        <AuthImage
+          imageId={promptImageId}
+          alt={currentQuestion.imageAlt?.[promptImageId] ?? ''}
+          className="max-h-[45vh] max-w-full mx-auto"
+        />
       )}
 
       <div className="text-fg text-xl">

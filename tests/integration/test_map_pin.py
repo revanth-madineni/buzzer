@@ -24,7 +24,15 @@ from PIL.PngImagePlugin import PngInfo
 
 from . import t4_helpers
 from .engine.socket_client import TestSocketClient as SocketClient
-from .t4_helpers import T4World, assert_error
+from .t4_helpers import (
+    T4World,
+    assert_error,
+    encode,
+    picture,
+    png,
+    upload,
+    upload_ok,
+)
 
 t4 = t4_helpers.t4  # fixture
 
@@ -34,26 +42,6 @@ US_MAP = _REPO_ROOT / "sample_games" / "assets" / "us-map.png"
 # ---------------------------------------------------------------------------
 # Image builders
 # ---------------------------------------------------------------------------
-
-
-def picture(size: tuple[int, int] = (80, 40), mode: str = "RGB") -> Image.Image:
-    img = Image.new(mode, size)
-    channels = len(img.getbands())
-    for x in range(size[0]):
-        for y in range(size[1]):
-            v = (x * 7 + y * 13) % 256
-            img.putpixel((x, y), (v, 255 - v, x % 256, 200)[:channels])
-    return img
-
-
-def encode(img: Image.Image, fmt: str, **kwargs) -> bytes:
-    buf = io.BytesIO()
-    img.save(buf, fmt, **kwargs)
-    return buf.getvalue()
-
-
-def png(size: tuple[int, int] = (80, 40)) -> bytes:
-    return encode(picture(size), "PNG")
 
 
 def gps_exif(orientation: int | None = None) -> Image.Exif:
@@ -75,32 +63,6 @@ def open_image(data: bytes) -> Image.Image:
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
-
-
-def upload(
-    t4: T4World,
-    data: bytes,
-    *,
-    token: str | None = None,
-    course_id: int | None = None,
-    host_course: int | None = None,
-    filename: str = "img.png",
-    content_type: str = "image/png",
-) -> httpx.Response:
-    """Admin upload by default; `host_course` uploads to that course's host route."""
-    files = {"file": (filename, data, content_type)}
-    if host_course is not None:
-        return t4.request(
-            "POST", f"/host/courses/{host_course}/images", token, files=files
-        )
-    form = {"course_id": str(course_id)} if course_id is not None else None
-    return t4.request("POST", "/admin/images", token, files=files, data=form)
-
-
-def upload_ok(t4: T4World, data: bytes, **kwargs) -> dict:
-    r = upload(t4, data, **kwargs)
-    assert r.status_code == 201, r.text
-    return r.json()
 
 
 def get_image(t4: T4World, image_id: str, token: str | None = None) -> httpx.Response:
@@ -134,6 +96,9 @@ def test_upload_auth(t4: T4World):
         "height",
         "byte_size",
         "sha256",
+        "alt_text",  # T8
+        "course_id",  # T8
+        "created_at",  # T8
     }
     assert uuid.UUID(admin_img["id"])
 
@@ -558,7 +523,9 @@ def test_update_type_change_without_config_rejected(t4: T4World, editor):
 def test_update_valid_map_pin(t4: T4World, editor):
     game, token, host = editor
     img = upload_ok(t4, png((800, 400)))
-    other = upload_ok(t4, png((100, 300)))
+    # In the game's course: since T8 a host may only add images of that course.
+    course = t4.get_game(game)["course_id"]
+    other = upload_ok(t4, png((100, 300)), course_id=course)
     q = create_q(t4, game, map_pin_question(img["id"])).json()
 
     r = update_q(
@@ -1323,8 +1290,8 @@ async def test_report_embeds_map_once_and_csv_has_points(t4: T4World):
     assert r.status_code == 200, r.text
     report = r.text
     # The image is embedded once and used by both map questions.
-    assert report.count(f'id="mapimg-{img["id"]}"') == 1
-    assert report.count(f'href="#mapimg-{img["id"]}"') == 2
+    assert report.count(f'id="img-{img["id"]}"') == 1
+    assert report.count(f'href="#img-{img["id"]}"') == 2
     assert report.count('viewBox="0 0 800 400"') == 2
     original = get_image(t4, img["id"]).content
     assert f"data:image/png;base64,{b64(original)}" in report

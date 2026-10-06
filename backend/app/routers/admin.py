@@ -48,6 +48,8 @@ from ..schemas.admin import (
     GameMoveResult,
     GameResponse,
     GameUpdate,
+    ImageAltUpdate,
+    ImageListItem,
     ImageResponse,
     QuestionCreate,
     QuestionReorder,
@@ -343,7 +345,7 @@ def _access_entry(user: User) -> dict:
 async def move_game(
     game_id: int,
     body: GameMoveRequest,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> dict:
@@ -352,6 +354,8 @@ async def move_game(
     holder lacks HOST on the target course would stop working, so they are
     dropped. confirm=false only reports them (no writes); the UI shows them first.
     Existing sessions keep their own course_id; `restricted` is unchanged.
+    Images follow the game (T8 §4.7a): re-tagged if only this game uses them,
+    copied if shared.
     """
     game = await game_service.lock_game(db, game_id)
     if not await db.get(Course, body.course_id):
@@ -365,7 +369,16 @@ async def move_game(
     ]
     dropped = [{**_access_entry(u), "has_course_host": False} for u in doomed]
     if not body.confirm:
-        return {"applied": False, "game": game, "dropped_grants": dropped}
+        preview = await image_service.rehome_game_images(
+            db, game, body.course_id, admin, apply=False
+        )
+        return {
+            "applied": False,
+            "game": game,
+            "dropped_grants": dropped,
+            "images_moved": preview.moved,
+            "images_copied": preview.copied,
+        }
 
     if doomed:
         await db.execute(
@@ -376,6 +389,9 @@ async def move_game(
         )
     old_course_id = game.course_id
     game.course_id = body.course_id
+    rehomed = await image_service.rehome_game_images(
+        db, game, body.course_id, admin, apply=True
+    )
     await db.flush()
     logger.info(
         "game_moved",
@@ -383,9 +399,17 @@ async def move_game(
         from_course_id=old_course_id,
         to_course_id=body.course_id,
         dropped_grants=len(doomed),
+        images_moved=rehomed.moved,
+        images_copied=rehomed.copied,
     )
     await db.commit()
-    return {"applied": True, "game": game, "dropped_grants": dropped}
+    return {
+        "applied": True,
+        "game": game,
+        "dropped_grants": dropped,
+        "images_moved": rehomed.moved,
+        "images_copied": rehomed.copied,
+    }
 
 
 @router.get("/games/{game_id}/access", response_model=list[GameAccessEntry])
@@ -430,11 +454,12 @@ async def list_questions(
     game_id: int,
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[Question]:
+) -> list[QuestionResponse]:
     game = await db.get(Game, game_id)
     if not game:
         raise NotFoundError(f"Game {game_id} not found")
-    return await question_service.list_questions(db, game)
+    questions = await question_service.list_questions(db, game)
+    return await question_service.question_responses(db, questions)
 
 
 @router.post(
@@ -443,15 +468,15 @@ async def list_questions(
 async def create_question(
     game_id: int,
     body: QuestionCreate,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
-) -> Question:
+) -> QuestionResponse:
     game = await game_service.lock_game(db, game_id)
     await game_service.assert_not_live(db, redis, game.id)
-    question = await question_service.create_question(db, game, body)
+    question = await question_service.create_question(db, game, body, admin)
     await db.commit()
-    return question
+    return (await question_service.question_responses(db, [question]))[0]
 
 
 @router.put("/games/{game_id}/questions/{question_id}", response_model=QuestionResponse)
@@ -459,21 +484,21 @@ async def update_question(
     game_id: int,
     question_id: int,
     body: QuestionUpdate,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
-) -> Question:
+) -> QuestionResponse:
     result = await db.execute(
         select(Question).where(Question.id == question_id, Question.game_id == game_id)
     )
     question = result.scalar_one_or_none()
     if not question:
         raise NotFoundError(f"Question {question_id} not found in game {game_id}")
-    await game_service.lock_game(db, game_id)
+    game = await game_service.lock_game(db, game_id)
     await game_service.assert_not_live(db, redis, game_id)
-    updated = await question_service.update_question(db, question, body)
+    updated = await question_service.update_question(db, game, question, body, admin)
     await db.commit()
-    return updated
+    return (await question_service.question_responses(db, [updated]))[0]
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)
@@ -527,12 +552,12 @@ async def export_game(
     )
     questions = result.scalars().all()
 
-    # Each distinct map_pin image once, as base64. Questions keep their source IDs;
-    # import remaps them.
+    # Each distinct image (every role, T8) once, as base64. Questions keep their
+    # source IDs; import remaps them.
     images = []
-    for image_id in game_service.game_image_ids(list(questions)):
+    for image_id in game_service.game_image_ids(list(questions), "host"):
         image = await image_service.get_image_with_data(db, image_id)
-        if image is None:  # shouldn't happen: v1 has no image delete
+        if image is None:  # shouldn't happen: in-use images can't be deleted
             raise BuzzerError(
                 "EXPORT_IMAGE_MISSING", f"Image {image_id} is missing", 409
             )
@@ -540,6 +565,7 @@ async def export_game(
             {
                 "id": image.id,
                 "mime_type": image.mime_type,
+                "alt_text": image.alt_text,
                 "data": base64.b64encode(image.data).decode("ascii"),
             }
         )
@@ -629,32 +655,36 @@ async def import_game(
     # Only referenced images are decoded and validated; others are ignored entirely.
     prepared: dict[str, image_service.PreparedImage] = {}
     for i, q in enumerate(validated_questions):
-        if q.type != "map_pin":
-            continue
-        image_id = q.config["imageId"]
-        if image_id not in bundle_images:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Question {i + 1} references image {image_id} not in bundle",
-            )
-        if image_id not in prepared:
-            prepared[image_id] = _prepare_bundle_image(
-                image_id, bundle_images[image_id]
-            )
+        for image_id, _ in game_service.question_image_ids(q.type, q.config):
+            if image_id not in bundle_images:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Question {i + 1} references image {image_id} not in bundle",
+                )
+            if image_id not in prepared:
+                prepared[image_id] = _prepare_bundle_image(
+                    image_id, bundle_images[image_id][0]
+                )
 
-    # Inserts, all in this transaction: images (new UUIDs), then game and questions.
+    # Inserts, all in this transaction: images (new UUIDs, tagged with the import's
+    # course so they pass course scoping later), then game and questions.
     new_ids: dict[str, str] = {}
     for old_id, image in prepared.items():
-        stored = await image_service.store_prepared(db, image, admin, course_id)
+        stored = await image_service.store_prepared(
+            db, image, admin, course_id, bundle_images[old_id][1]
+        )
         new_ids[old_id] = stored.id
     for q in validated_questions:
+        config = q.config
+        for old_id in {i for i, _ in game_service.question_image_ids(q.type, config)}:
+            config = game_service.repoint_config(
+                q.type, config, old_id, new_ids[old_id]
+            )
         if q.type == "map_pin":
             old_id = q.config["imageId"]
-            q.config = {
-                "imageId": new_ids[old_id],
-                "imageWidth": prepared[old_id].width,
-                "imageHeight": prepared[old_id].height,
-            }
+            config["imageWidth"] = prepared[old_id].width
+            config["imageHeight"] = prepared[old_id].height
+        q.config = config
 
     game = Game(
         title=game_meta.title,
@@ -692,8 +722,9 @@ async def import_game(
     return {"game_id": game.id}
 
 
-def _bundle_images(bundle: dict, version: int) -> dict[str, str]:
-    """Bundle image list → {id: base64 data}. Shape only; nothing is decoded here."""
+def _bundle_images(bundle: dict, version: int) -> dict[str, tuple[str, str]]:
+    """Bundle image list → {id: (base64 data, alt_text)}. Shape only; nothing is
+    decoded here. `alt_text` is optional (older v2 files have none → "")."""
     if "images" not in bundle:
         return {}
     if version == 1:
@@ -708,7 +739,7 @@ def _bundle_images(bundle: dict, version: int) -> dict[str, str]:
             status_code=422,
             detail=f"A bundle can contain at most {_MAX_BUNDLE_IMAGES} images",
         )
-    images: dict[str, str] = {}
+    images: dict[str, tuple[str, str]] = {}
     for n, entry in enumerate(entries, start=1):
         if not isinstance(entry, dict):
             raise HTTPException(status_code=422, detail=f"Image {n} must be an object")
@@ -731,7 +762,14 @@ def _bundle_images(bundle: dict, version: int) -> dict[str, str]:
             raise HTTPException(
                 status_code=422, detail=f"Image {image_id} needs a base64 data string"
             )
-        images[image_id] = entry["data"]
+        alt_text = entry.get("alt_text", "")
+        if not isinstance(alt_text, str) or len(alt_text) > image_service.ALT_TEXT_MAX:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Image {image_id} alt_text must be a string of at most "
+                f"{image_service.ALT_TEXT_MAX} characters",
+            )
+        images[image_id] = (entry["data"], alt_text.strip())
     return images
 
 
@@ -753,8 +791,10 @@ def _prepare_bundle_image(image_id: str, data: str) -> image_service.PreparedIma
 
 
 # ---------------------------------------------------------------------------
-# Images (T7). Upload only; reading is GET /api/images/{id} (routers/images.py).
-# No live-game guard: an upload writes no game or question.
+# Images (T7 upload; T8 list, alt text, delete, replace). Reading the bytes is
+# GET /api/images/{id} (routers/images.py). Upload, alt text and delete need no
+# live-game guard (no game or question is written; an in-use image can't be
+# deleted). Replace locks and checks every affected game itself.
 # ---------------------------------------------------------------------------
 
 
@@ -766,15 +806,88 @@ async def upload_image(
     admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     course_id: Annotated[int | None, Form()] = None,
+    alt_text: Annotated[str | None, Form()] = None,
 ) -> Image:
     if course_id is not None and not await db.get(Course, course_id):
         raise NotFoundError(f"Course {course_id} not found")
-    image = await image_service.store_image(db, await file.read(), admin, course_id)
+    alt = image_service.clean_alt_text(alt_text)
+    image = await image_service.store_image(
+        db, await file.read(), admin, course_id, alt
+    )
     # Commit before responding: get_db's commit runs after the response is sent, so a
     # client that GETs the image right after the 201 could otherwise get a 404.
     await db.commit()
     logger.info("admin_image_uploaded", image_id=image.id, user_id=admin.id)
     return image
+
+
+async def _admin_image(db: AsyncSession, image_id: str) -> Image:
+    image = await image_service.get_image(db, image_id)
+    if image is None:
+        raise NotFoundError(f"Image {image_id} not found")
+    return image
+
+
+@router.get("/images", response_model=list[ImageListItem])
+async def list_images(
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    course_id: Annotated[int | None, Query()] = None,
+    unassigned: Annotated[bool, Query()] = False,
+) -> list[dict]:
+    if unassigned and course_id is not None:
+        raise BuzzerError(
+            "VALIDATION_ERROR", "Use either course_id or unassigned, not both", 422
+        )
+    return await image_service.list_images(
+        db, admin, course_id=course_id, unassigned=unassigned
+    )
+
+
+@router.patch("/images/{image_id}", response_model=ImageResponse)
+async def update_image(
+    image_id: str,
+    body: ImageAltUpdate,
+    _: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Image:
+    image = await _admin_image(db, image_id)
+    await image_service.set_alt_text(db, image, body.alt_text)
+    await db.commit()
+    return image
+
+
+@router.delete("/images/{image_id}", status_code=204)
+async def delete_image(
+    image_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    image = await _admin_image(db, image_id)
+    await image_service.delete_image(db, image, admin)
+    await db.commit()
+
+
+@router.post(
+    "/images/{image_id}/replace", response_model=ImageResponse, status_code=201
+)
+@limiter.limit("30/minute")
+async def replace_image(
+    request: Request,
+    image_id: str,
+    file: Annotated[UploadFile, File(description="PNG, JPEG or WebP, at most 2 MB")],
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+    alt_text: Annotated[str | None, Form()] = None,
+) -> Image:
+    old = await _admin_image(db, image_id)
+    alt = None if alt_text is None else image_service.clean_alt_text(alt_text)
+    new = await image_service.replace_image(
+        db, redis, old, await file.read(), alt, admin
+    )
+    await db.commit()
+    return new
 
 
 # ---------------------------------------------------------------------------
