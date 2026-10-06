@@ -10,30 +10,41 @@ game.
 
 ## Contents
 Top-level files:
-- `main.tsx` — Mounts `<App />` in `StrictMode` and imports `index.css`.
+- `main.tsx` — Imports `theme.css` then `index.css`, calls `initTheme()` (`lib/theme.ts`)
+  before `createRoot`, and mounts `<App />` in `StrictMode`.
 - `App.tsx` — `react-router` routes under basename `import.meta.env.BASE_URL` (`/admin/` in
   production, `/` in dev). `/login` is public. Everything else sits inside `RequireAdmin`
   (despite the name, it only checks that `localStorage.token` is **present**) and
   `AdminLayout`. Its sidebar has two sections: **Admin** (Users, Courses, Access) and **Host
-  tools** (Games, Sessions, Guests), plus Logout. Routes: `/users`, `/users/:userId`,
-  `/courses`, `/courses/:courseId/roster`, `/access`, `/games`, `/games/:gameId/questions`,
-  `/sessions`, `/guests`. Anything else, and a successful login, goes to `/users`.
-- `index.css` — Tailwind directives and global dark-slate body styles.
+  tools** (Games, Sessions, Guests), plus the theme toggle and Logout. Routes: `/users`,
+  `/users/:userId`, `/courses`, `/courses/:courseId/roster`, `/access`, `/games`,
+  `/games/:gameId/questions`, `/sessions`, `/guests`. Anything else, and a successful login,
+  goes to `/users`.
+- `theme.css` (T9) — the colour tokens as RGB-channel CSS variables (invariant, dark and
+  light blocks), byte-identical to the player app's. Its block selectors are parsed literally
+  by `scripts/check_theme.py`.
+- `index.css` — Tailwind directives and the token-based base rules: page background and text
+  colour, placeholders, `accent-color`, the one global `:focus-visible` outline, the
+  `data-fill` rules and the `.focus-inset` utility.
+- `../index.html` — declares `<html data-theme-key="buzzer:theme:admin">` (the only place the
+  key is written) and runs a small inline script that sets `data-theme` before first paint,
+  which must agree with `lib/theme.ts`.
 
 There's no `types/` directory. Each page declares its own response interfaces inline.
 
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
-| `lib/` | `api.ts` REST wrapper with `get`/`post`/`put`/`patch`/`delete`, `postForm` (multipart upload) and `download` (Blob + `Content-Disposition` filename), showing the server's error `message`; `cn()`; (T7) `mapPin.ts` and `images.ts`, byte-identical across all three apps. No role logic. `api.ts` is identical to the host app's. |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), byte-identical to the host app's, `MoveGamePanel` (the move/assign-with-preview flow shared by `GamesPage` and `AccessPage`), and (T7) `MapCanvas` for placing map-pin targets. |
+| `lib/` | `api.ts` REST wrapper with `get`/`post`/`put`/`patch`/`delete`, `postForm` (multipart upload) and `download` (Blob + `Content-Disposition` filename), showing the server's error `message`; `cn()`; (T7) `mapPin.ts` and `images.ts` and (T9) `theme.ts`, byte-identical across all three apps. No role logic. `api.ts` is identical to the host app's. |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), byte-identical to the host app's, `MoveGamePanel` (the move/assign-with-preview flow shared by `GamesPage` and `AccessPage`), (T7) `MapCanvas` for placing map-pin targets, and (T9) `ThemeToggle`. |
 | `pages/` | One self-contained page per route (`useState` + `load()`, no shared store). |
 
 ## How it fits together
 Dependency direction: `pages/` → `components/` + `lib/`. The only persistent client state is
-`localStorage.token`, shared with the host and player apps (see Gotchas). In dev, Vite serves
-on :5175 and proxies `/api` to `localhost:8000`. Behind nginx, it's same-origin under
-`/admin/`.
+`localStorage.token`, shared with the host and player apps (see Gotchas), and the theme choice
+under `buzzer:theme:admin`, which is deliberately separate from the other apps' keys. In dev,
+Vite serves on :5175 and proxies `/api` to `localhost:8000`. Behind nginx, it's same-origin
+under `/admin/`.
 
 ### Endpoints
 Every call is under `/api/admin/*` and guarded by `require_admin`, with two exceptions:
@@ -99,9 +110,13 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
   include blank options that were dropped from the payload. Answer-data keys mix `answer_points` (snake_case)
   with fill-in-the-blank's camelCase, so a new question type touches this app, the backend,
   and both game frontends.
-- **Literal `…` / `±` render on screen** in five JSX text spots (`pages/CLAUDE.md`).
+- **Literal `…` / `±` / `·` escape sequences render on screen** in several JSX text
+  spots, including every question line in both question editors (`pages/CLAUDE.md`).
 - **Duplicated code across apps.** `lib/api.ts` and `components/ui/*` are identical copies of
   the host app's, and the host's `pages/manage/QuestionEditorPage.tsx` is an adapted copy of
   this app's `QuestionEditorPage`. Fixes don't propagate.
+- **Colours come only from theme tokens.** The Tailwind palette is replaced, so a leftover raw
+  class compiles to nothing, with no error. Run `python scripts/check_theme.py` before an MR;
+  it isn't in CI. See `frontend/CLAUDE.md` and `pages/CLAUDE.md` "Theme conventions".
 - `StrictMode` double-runs effects in dev, so every page's `load()` fires twice on mount. That's
   harmless (reads only).

@@ -2,29 +2,40 @@
 
 ## Purpose
 Presentational building blocks for the admin (desktop) app: three shadcn-style primitives
-under `ui/`, styled with Tailwind for the dark slate theme, and two feature components,
-`MoveGamePanel` and (T7) `MapCanvas`. Apart from the panel's single API call and the canvas's
-image load (via `lib/images.ts`), there's no data fetching, game state, or role/access logic
-here. The admin app has no `TimerBar` because it never runs a game.
+under `ui/`, styled with the theme tokens so they work in both themes, and three feature
+components: `MoveGamePanel`, (T7) `MapCanvas` and (T9) `ThemeToggle`. Apart from the panel's
+single API call and the canvas's image load (via `lib/images.ts`), there's no data fetching,
+game state, or role/access logic here. The admin app has no `TimerBar` because it never runs a game.
 
 ## Contents
-- `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default | outline | ghost |
-  destructive`) and `size` (`sm | md | lg`). Class names are merged via `cn` from `lib/utils`.
-- `ui/card.tsx` — `Card`, `CardHeader`, `CardContent`: styled `<div>` wrappers.
-- `ui/input.tsx` — `Input`: styled native `<input>`, full width.
+- `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default` accent fill,
+  `outline` line-strong border, `ghost`, `destructive` danger fill) and `size` (`sm | md |
+  lg`). Class names are merged via `cn` from `lib/utils`. Hover classes are `enabled:hover:…`,
+  so a disabled button (opacity-50, not-allowed cursor) doesn't react to hover.
+- `ui/card.tsx` — `Card`, `CardHeader`, `CardContent`: `<div>` wrappers; the card is an opaque
+  `surface` with a `line` border.
+- `ui/input.tsx` — `Input`: native `<input>`, full width, `surface-alt` with a `line-strong`
+  border (a recessed control, meant to sit inside a `surface`).
 - `MoveGamePanel.tsx` (T4) — assign a courseless game to a course, or move it. It calls
   `POST /admin/games/{id}/move` with `confirm=false`, lists "These users will lose access: …"
   (or "No grants will be dropped"), then calls with `confirm=true` and runs `onDone`. Without
   `fixedCourseId` it shows a course picker (excluding the current course). `GamesPage` uses it
-  that way; `AccessPage` fixes the course.
+  that way; `AccessPage` fixes the course. It is a `surface-alt` panel, so it belongs inside a
+  card.
 - `MapCanvas.tsx` (T7) — the shared map canvas, byte-identical to the player's and host's
   copies (see `frontend/player/src/components/CLAUDE.md`). `QuestionEditorPage` uses it with
   `heightCap={0.7}` and `onPoint` to place a map-pin target, and `draw` for the live circles.
+  Only its chrome is themed; the image and overlays look the same in both themes.
+- `ThemeToggle.tsx` (T9) — **byte-identical in all three apps**. A 44×44 `<button>` using
+  `useTheme()` (`lib/theme.ts`); its icon, `title`, `aria-label` and optional visible label
+  all name the theme it switches **to**. `className` is for placement only.
 
 ## How it fits in
 - All nine pages under `pages/` import `Button` and `Input`. All except `SessionsPage` also
   use `Card` + `CardHeader` + `CardContent`; `SessionsPage` imports `Card` alone.
-- `App.tsx`'s sidebar and logout button are hand-styled and don't use these.
+- `App.tsx`'s sidebar and logout button are hand-styled and don't use the `ui/` primitives.
+  The sidebar renders `ThemeToggle` (labelled, directly above Logout), and `LoginPage` renders
+  it fixed top-right.
 - `lib/utils.ts` supplies `cn`. See `lib/CLAUDE.md`.
 
 ## Gotchas
@@ -34,11 +45,20 @@ here. The admin app has no `TimerBar` because it never runs a game.
     picker (`USER | ADMIN`) in `UserDetailPage`, and question type / grading type in
     `QuestionEditorPage`.
   - The **per-course** `HOST | PLAYER` choice in `UserDetailPage` is a hand-rolled two-button
-    toggle (raw `<button>`s, not `Button`), next to a checkbox list of courses. Game grants are a
-    plain checkbox list with no role.
+    toggle (raw `<button>`s, not `Button`), next to a checkbox list of courses. The selected
+    segment is an accent fill with "✓ " before its label. Its wrapper must not be
+    `overflow-hidden`, which clipped the segments' focus outlines. Game grants are a plain
+    checkbox list with no role.
   - `<textarea>` in `GamesPage` and `QuestionEditorPage`.
   - Destructive actions use the browser's `window.confirm()` (`GamesPage`, `GuestsPage`,
-    `UserDetailPage`, `QuestionEditorPage`). Styles for those controls are repeated per page.
+    `UserDetailPage`, `QuestionEditorPage`). Styles for those controls are repeated per page:
+    native controls are `surface-alt` with a `line-strong` border and `fg` text inside a card,
+    and `surface` when they sit directly on the page.
+- **A `className` hover override on a `Button` must use `enabled:hover:`**, because the
+  variant's `enabled:hover:` rule has higher specificity than a plain `hover:`.
+- **Colours come only from the theme tokens** (a raw palette class compiles to nothing; run
+  `scripts/check_theme.py`). Focus comes from the global `:focus-visible` outline in
+  `../index.css`, so don't add `focus:ring-*` or `outline-none`.
 - `Button` doesn't default `type`, so inside a `<form>` it acts as `type="submit"`. Pass
   `type="button"` for non-submit buttons (e.g. "Cancel" or "Add option" inside an edit form).
 - **These are copies, not shared code.** The three files are byte-identical to

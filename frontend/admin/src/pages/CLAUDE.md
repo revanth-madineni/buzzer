@@ -12,7 +12,7 @@ Routes are defined in `../App.tsx` (basename `/admin/` in production). Everythin
 sidebar has two sections: **Admin** (Users, Courses, Access) and **Host tools** (Games,
 Sessions, Guests), plus Logout. Unknown paths → `/users`.
 - `LoginPage.tsx` — `/login`: username + password → `POST /auth/login` → `/users`. No NetID
-  SSO and no role check.
+  SSO and no role check. Renders the theme toggle fixed top-right.
 - `CoursesPage.tsx` — `/courses`: list, create, and rename courses (name + semester). It also
   sets `allow_guests`: a checkbox on create, and a per-course "Guests allowed" toggle
   (`PUT {allow_guests}`). Each row links to its roster. No delete (there's no endpoint).
@@ -81,6 +81,33 @@ Sessions, Guests), plus Logout. Unknown paths → `/users`.
 Uses `lib/api.ts` (see `lib/CLAUDE.md` for the full endpoint-per-page table) and
 `components/ui/*` (see `components/CLAUDE.md`). No `types/` directory: each page declares its
 own response interfaces inline, mirroring `backend/app/schemas/`.
+
+### Theme conventions (T9)
+Density is unchanged: same padding, font sizes and table layout.
+- **Badges.** `rounded px-1.5 py-0.5 text-xs font-semibold`, with `bg-<status>-soft
+  text-<status>-fg`, or `bg-surface-alt text-fg-muted` for neutral badges inside a card. The
+  same meaning gets the same badge everywhere:
+  - Restricted → warning;
+  - Unassigned → neutral;
+  - session status: `LOBBY` and `IN_PROGRESS` → accent (live), `COMPLETED` → neutral,
+    `ABANDONED` → danger;
+  - roster Active → success, Inactive → neutral;
+  - user role ADMIN → accent, USER → neutral.
+- **Selected desktop controls** (the HOST/PLAYER toggle, the Sessions export-format buttons
+  and status filter): the selected segment is `bg-accent text-on-accent`, and on the toggle
+  and export format it also gets "✓ " before its label. `accent-soft` is not used for
+  selection: it is only 1.1–1.2:1 against the surfaces. The sidebar's active link is the
+  accent fill too.
+- **Tables.** Header rows are `bg-surface-alt text-fg-muted`, row dividers `line`, row hover
+  and the row being edited `surface-hover`. `surface-alt` only reads as recessed inside a
+  `surface`, so a table that sits on the page (the roster) has a `surface` wrapper.
+- **Native controls** (`<select>`, `<textarea>`, checkboxes): `surface-alt` with a
+  `line-strong` border inside a card, `surface` directly on the page. `AccessPage`'s
+  `selectClass` therefore carries no background; each use adds its own.
+- **Focus.** One global outline, drawn outside the element. A control inside an
+  `overflow-hidden/-auto` container that would clip it gets `focus-inset`, but never a filled
+  button: give the container room instead. As of T9 none needs it, because the table cells'
+  padding leaves room for the outline (checked automatically, see `docs/ui/README.md`).
 
 ### Roles and access: what this app writes, and who reads it
 Two separate role systems (see `backend/app/models/CLAUDE.md`):
@@ -151,8 +178,9 @@ Two separate role systems (see `backend/app/models/CLAUDE.md`):
 - **`max_players` is editable but never enforced** by the server (see `websocket/CLAUDE.md`).
 - **Literal escape sequences render on screen.** `Loading…` in JSX text (not inside
   `{'…'}`) shows the backslash sequence verbatim. This happens in `UsersPage`, `GuestsPage`,
-  `GamesPage`, `QuestionEditorPage` (loading), and the `(±…` edit-distance label in
-  `QuestionEditorPage`'s list.
+  `GamesPage`, `QuestionEditorPage` (loading), the `(±…` edit-distance label in
+  `QuestionEditorPage`'s list, and the `30s \u00b7 1pts` time/points line of every question
+  in both question editors' lists (the host copy too).
 - Reorder sends the full order after a single swap. Two admins editing the same game will
   overwrite each other. The list isn't reloaded after reorder, only the local swap applied.
 - `SessionsPage` export options are kept per session in component state and lost on navigation.
