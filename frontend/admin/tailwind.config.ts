@@ -59,10 +59,15 @@ const tokens = {
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
+    // The tokens replace Tailwind's palette, so a raw class such as bg-slate-800 compiles to
+    // nothing (and no error). scripts/check_theme.py is what catches one.
+    colors: {
+      transparent: 'transparent',
+      current: 'currentColor',
+      inherit: 'inherit',
+      ...tokens,
+    },
     extend: {
-      // Interim (§4.18 steps 3–5): the tokens extend the palette so raw classes still work
-      // during the sweep. Step 6 moves them to theme.colors, replacing the palette.
-      colors: tokens,
       borderColor: { DEFAULT: token('line') },
       // Tailwind builds the default ring colour with withAlphaValue(), which can't parse an
       // <alpha-value> string and would fall back to a hardcoded blue. The function form works
