@@ -91,24 +91,24 @@ export default function HomePage() {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 gap-4">
       <ThemeToggle className="fixed top-4 right-4 z-40" />
       {activeSessions.length > 0 && (
-        <Card className="w-full max-w-lg border-amber-500/40">
+        <Card className="w-full max-w-lg border-warning">
           <CardHeader>
-            <h2 className="text-lg font-semibold text-amber-400">Active Sessions</h2>
-            <p className="text-slate-400 text-sm">You have running games — rejoin one or create a new room below.</p>
+            <h2 className="text-lg font-semibold text-warning-fg">Active Sessions</h2>
+            <p className="text-fg-muted text-sm">You have running games — rejoin one or create a new room below.</p>
           </CardHeader>
           <CardContent className="space-y-2">
             {activeSessions.map(s => (
               <div
                 key={s.session_id}
-                className="flex items-center justify-between rounded-lg bg-slate-800 border border-slate-700 px-4 py-3"
+                className="flex items-center justify-between rounded-lg bg-surface-alt border border-line px-4 py-3"
               >
                 <div>
-                  <p className="text-slate-100 font-medium">{s.game_title}</p>
-                  <p className="text-slate-400 text-sm">{s.course_name} · {s.course_semester}</p>
-                  <p className="text-slate-500 text-xs mt-0.5">
-                    Room <span className="font-mono text-slate-300">{s.room_code}</span>
+                  <p className="text-fg font-medium">{s.game_title}</p>
+                  <p className="text-fg-muted text-sm">{s.course_name} · {s.course_semester}</p>
+                  <p className="text-fg-muted text-xs mt-0.5">
+                    Room <span className="font-mono text-fg">{s.room_code}</span>
                     {' · '}
-                    <span className={s.status === 'IN_PROGRESS' ? 'text-green-400' : 'text-amber-400'}>
+                    <span className={s.status === 'IN_PROGRESS' ? 'text-success-fg' : 'text-warning-fg'}>
                       {s.status === 'IN_PROGRESS' ? 'In Progress' : 'Lobby'}
                     </span>
                   </p>
@@ -116,7 +116,7 @@ export default function HomePage() {
                 <div className="flex items-center gap-2 shrink-0">
                   {confirmDelete === s.session_id ? (
                     <>
-                      <span className="text-red-400 text-xs">Delete all data?</span>
+                      <span className="text-danger-fg text-xs">Delete all data?</span>
                       <Button size="sm" variant="destructive" onClick={() => deleteSession(s.session_id)}>
                         Confirm
                       </Button>
@@ -145,26 +145,26 @@ export default function HomePage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-slate-100">Create Game Room</h1>
-              <p className="text-slate-400 text-sm mt-1">Select a course and quiz to begin</p>
+              <h1 className="text-2xl font-bold text-fg">Create Game Room</h1>
+              <p className="text-fg-muted text-sm mt-1">Select a course and quiz to begin</p>
             </div>
             <Button variant="ghost" size="sm" onClick={logout}>Sign Out</Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {loaded && courses.length === 0 ? (
-            <p className="text-slate-300 text-sm">
+            <p className="text-fg text-sm">
               You don't host any courses yet — ask an admin for HOST access
             </p>
           ) : (
           <>
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Course</label>
+            <label className="block text-sm font-medium text-fg mb-1">Course</label>
             <div className="flex gap-2">
               <select
                 value={courseId}
                 onChange={e => selectCourse(e.target.value ? Number(e.target.value) : '')}
-                className="flex-1 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="flex-1 rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg"
               >
                 <option value="">Select a course…</option>
                 {courses.map(c => (
@@ -181,12 +181,12 @@ export default function HomePage() {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Quiz</label>
+            <label className="block text-sm font-medium text-fg mb-1">Quiz</label>
             <select
               value={gameId}
               onChange={e => setGameId(e.target.value ? Number(e.target.value) : '')}
               disabled={!courseId}
-              className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg"
             >
               <option value="">Select a quiz…</option>
               {courseGames.map(g => (
@@ -194,12 +194,12 @@ export default function HomePage() {
               ))}
             </select>
             {courseId !== '' && courseGames.length === 0 && (
-              <p className="text-slate-500 text-xs mt-1">
+              <p className="text-fg-muted text-xs mt-1">
                 No quizzes you can run in this course — create one under "Manage this course".
               </p>
             )}
           </div>
-          {error && <p className="text-red-400 text-sm">{error}</p>}
+          {error && <p className="text-danger-fg text-sm">{error}</p>}
           <Button
             className="w-full"
             size="lg"
