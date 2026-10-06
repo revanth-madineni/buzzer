@@ -252,10 +252,11 @@ export default function SessionsPage() {
                             onClick={() => setOpt(s.session_id, s.game_title, 'format', fmt)}
                             className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
                               opts.format === fmt
-                                ? 'bg-indigo-600 border-indigo-500 text-white'
-                                : 'border-slate-600 text-slate-300 hover:border-slate-500'
+                                ? 'bg-accent border-accent text-on-accent'
+                                : 'border-line-strong text-fg enabled:hover:bg-surface-hover'
                             }`}
                           >
+                            {opts.format === fmt && '✓ '}
                             {fmt === 'canvas' ? 'Canvas Gradebook' : 'Raw CSV'}
                           </button>
                         ))}

@@ -365,13 +365,13 @@ export default function UserDetailPage() {
                     </span>
                     <div className="flex rounded overflow-hidden border border-line-strong text-xs">
                       <button
-                        className={`px-2 py-1 ${sel.role === 'HOST' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                        className={`px-2 py-1 ${sel.role === 'HOST' ? 'bg-accent text-on-accent' : 'text-fg-muted enabled:hover:text-fg'}`}
                         onClick={() => setCourseSelections((prev) => prev.map((s, j) => j === i ? { ...s, role: 'HOST' } : s))}
-                      >HOST</button>
+                      >{sel.role === 'HOST' && '✓ '}HOST</button>
                       <button
-                        className={`px-2 py-1 ${sel.role === 'PLAYER' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                        className={`px-2 py-1 ${sel.role === 'PLAYER' ? 'bg-accent text-on-accent' : 'text-fg-muted enabled:hover:text-fg'}`}
                         onClick={() => setCourseSelections((prev) => prev.map((s, j) => j === i ? { ...s, role: 'PLAYER' } : s))}
-                      >PLAYER</button>
+                      >{sel.role === 'PLAYER' && '✓ '}PLAYER</button>
                     </div>
                   </div>
                 );
