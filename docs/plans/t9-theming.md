@@ -350,8 +350,11 @@ Import it from `src/main.tsx`, immediately **before** `./index.css`.
 - Set `theme.extend.borderColor.DEFAULT` to the `line` mapping. Once the palette is replaced,
   Tailwind's default border colour (`gray.200`) no longer exists, and every bare `border` and
   the preflight default would fall back to `currentColor`.
-- Set `theme.extend.ringColor.DEFAULT` to the `focus` mapping. Without it, a bare `ring` falls
-  back to hardcoded blue.
+- Set `theme.extend.ringColor.DEFAULT` to the `focus` colour. Without it, a bare `ring` falls
+  back to hardcoded blue. Use Tailwind's function form (`({ opacityValue }) =>
+  rgb(var(--focus) / <opacityValue>)`, cast to `string` for the types), not the
+  `<alpha-value>` string: Tailwind builds the default ring colour with `withAlphaValue()`, which
+  can't parse that string and silently keeps the blue.
 - Keep the existing `fontFamily` and `content` globs. Don't add custom `fontSize` names: `cn()`
   uses tailwind-merge, which would mistake a custom size such as `text-display` for a colour
   and drop one of the two classes. Stock sizes (`text-xl` … `text-7xl`) are enough.
@@ -843,13 +846,19 @@ True/False. One room therefore produces every screen.
 | app | screens (`<screen>` names) |
 |---|---|
 | host | `login`, `home`, `manage-question-editor` (map-pin question open, with the image and target placed), `lobby`, `question`, `results-bars` (ACCURACY multiple choice), `results-wordcloud`, `results-heatmap`, `gameover` |
-| player | `join`, `question-mc`, `question-multi` (one option selected), `question-map`, `results-map`, `gameover` |
+| player | `join` (`NamePage`, "Join Room …", which is what the before image shows), `question-mc`, `question-multi` (one option selected), `question-map`, `results-map`, `gameover` |
 | admin | `users`, `access`, `question-editor-map`, `sessions-export` (export panel open) |
 
 That is 19 screens, so 38 "after" images. There are 17 "before" images: `host-results-wordcloud`
 and `player-question-multi` were added to this list after the "before" set was taken, and they
 have **no before image**. They need only the two "after" images, and their `docs/ui/README.md`
 rows show "—" in the before column.
+
+**Before-image size.** The committed "before" images were captured from a laptop browser window
+(about 1400×680 CSS px at 2×), not at the viewports above; the player ones are desktop-width.
+The "after" images are still taken at the viewports above, and `docs/ui/README.md` says in one
+line that the before set is at a different size, so the pairs compare colour and design, not
+layout at the target size.
 
 ### 4.17 T8 and later code
 
@@ -1101,3 +1110,12 @@ Per `.claude/rules/context-sync.md`, update:
     `overflow-auto` `<main>` with their own top-right actions.
   - **Session status chips.** `LOBBY` and `IN_PROGRESS` → accent, `COMPLETED` → neutral,
     `ABANDONED` → danger (§4.11 badge convention).
+- 2026-10-05 — Implementation review after step 3:
+  - **`ringColor.DEFAULT` uses Tailwind's function form** (§4.5). Written as the
+    `<alpha-value>` string, the setting was silently ignored and the default ring stayed blue,
+    because Tailwind's ring default goes through `withAlphaValue()`. The function form gives
+    `rgb(var(--focus) / 0.5)`; it needs a cast because Tailwind's types omit it.
+  - **Screenshots (user decision).** The "before" set turned out to be laptop-window captures,
+    not taken at §4.16's viewports, and `player-join` shows `NamePage`. The "after" images stay at
+    the spec viewports, `docs/ui/README.md` notes the size mismatch, and the `player-join`
+    "after" image shows `NamePage` to match (§4.16).
