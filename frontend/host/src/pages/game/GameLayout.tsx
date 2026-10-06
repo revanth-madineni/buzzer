@@ -254,8 +254,8 @@ export default function GameLayout() {
             <QRCodeSVG value={playerJoinUrl} size={96} />
           </div>
           <div className="text-center">
-            <p className="text-fg-muted text-[10px] uppercase tracking-widest leading-none mb-0.5">Room Code</p>
-            <p className="text-fg font-mono font-black tracking-widest text-lg leading-none">{code}</p>
+            <p className="text-fg-muted text-sm uppercase tracking-widest leading-none mb-1">Room Code</p>
+            <p className="text-fg font-mono font-black tracking-widest text-2xl leading-none">{code}</p>
           </div>
         </div>
       </div>

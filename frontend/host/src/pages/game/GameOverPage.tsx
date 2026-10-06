@@ -58,7 +58,7 @@ function AnswerBar({ label, count, total, correct, colorClass }: {
   const pct = total > 0 ? (count / total) * 100 : 0;
   return (
     <div className="flex items-center gap-3">
-      <span className={`w-6 text-center font-bold text-sm shrink-0 ${correct ? 'text-success-fg' : 'text-fg-muted'}`}>
+      <span className={`w-6 text-center font-bold text-lg shrink-0 ${correct ? 'text-success-fg' : 'text-fg'}`}>
         {label}
       </span>
       <div className="flex-1 h-6 bg-chart-track rounded overflow-hidden">
@@ -67,11 +67,11 @@ function AnswerBar({ label, count, total, correct, colorClass }: {
           style={{ width: `${Math.max(pct, count > 0 ? 2 : 0)}%` }}
         />
       </div>
-      <span className={`w-8 text-right text-sm font-semibold shrink-0 ${correct ? 'text-success-fg' : 'text-fg-muted'}`}>
+      <span className={`w-10 text-right text-lg font-semibold tabular-nums shrink-0 ${correct ? 'text-success-fg' : 'text-fg'}`}>
         {count}
       </span>
-      {correct && <span className="text-success-fg text-xs font-bold shrink-0">✓</span>}
-      {!correct && <span className="w-4 shrink-0" />}
+      {correct && <span className="w-5 text-success-fg text-lg font-bold shrink-0">✓</span>}
+      {!correct && <span className="w-5 shrink-0" />}
     </div>
   );
 }
@@ -112,24 +112,24 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-fg-muted text-xs uppercase tracking-widest font-semibold">
+          <span className="text-fg-muted text-sm uppercase tracking-widest font-semibold">
             Q{index + 1}
           </span>
           <span className="text-fg-muted">·</span>
-          <span className="text-fg-muted text-xs uppercase tracking-widest">
+          <span className="text-fg-muted text-sm uppercase tracking-widest">
             {typeLabel[type] ?? type}
           </span>
           <span className="text-fg-muted">·</span>
-          <span className={`text-xs uppercase tracking-widest font-semibold ${gradingType === 'COMPLETENESS' ? 'text-warning-fg' : 'text-accent-fg'}`}>
+          <span className={`text-sm uppercase tracking-widest font-semibold ${gradingType === 'COMPLETENESS' ? 'text-warning-fg' : 'text-accent-fg'}`}>
             {gradingType === 'COMPLETENESS' ? 'Participation' : 'Accuracy'}
           </span>
           <span className="text-fg-muted">·</span>
-          <span className="text-fg-muted text-xs">{pointsValue} {pointsValue === 1 ? 'pt' : 'pts'}</span>
+          <span className="text-fg-muted text-sm">{pointsValue} {pointsValue === 1 ? 'pt' : 'pts'}</span>
         </div>
-        <div className="text-right text-xs text-fg-muted shrink-0">
+        <div className="text-right text-lg text-fg shrink-0">
           <span className="text-fg font-semibold">{totalAnswered}</span>/{totalPlayers} answered
           {avgAnswerTimeMs !== null && (
-            <span className="ml-2 text-fg-muted">· avg {(avgAnswerTimeMs / 1000).toFixed(1)}s</span>
+            <span className="ml-2">· avg {(avgAnswerTimeMs / 1000).toFixed(1)}s</span>
           )}
         </div>
       </div>
@@ -144,7 +144,7 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
           const correct = isCorrectIndex(i);
           return (
             <div key={i} className="space-y-0.5">
-              <div className="flex items-center gap-2 text-xs text-fg-muted">
+              <div className="flex items-center gap-2 text-lg text-fg">
                 <span className={`font-bold ${correct ? 'text-success-fg' : ''}`}>{optionLabel(i)}.</span>
                 <span className={correct ? 'text-success-fg' : ''}>{opt}</span>
               </div>
@@ -177,7 +177,7 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
         {type === 'fill_in_the_blank' && (
           <div className="space-y-2">
             {reveal.type === 'fill_in_the_blank' && (
-              <p className="text-fg-muted text-sm">
+              <p className="text-fg text-lg">
                 Accepted:{' '}
                 {(reveal as { type: 'fill_in_the_blank'; acceptedAnswers: string[]; editDistance: number }).acceptedAnswers.map((a, i, arr) => (
                   <span key={i}>
@@ -186,7 +186,7 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
                   </span>
                 ))}
                 {(reveal as { type: 'fill_in_the_blank'; acceptedAnswers: string[]; editDistance: number }).editDistance > 0 && (
-                  <span className="text-fg-muted ml-1">
+                  <span className="text-fg ml-1">
                     (±{(reveal as { type: 'fill_in_the_blank'; acceptedAnswers: string[]; editDistance: number }).editDistance} typo)
                   </span>
                 )}
@@ -197,7 +197,7 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
       </div>
 
       {/* Footer stats */}
-      <div className="flex items-center gap-4 pt-1 border-t border-line text-sm">
+      <div className="flex items-center gap-4 pt-1 border-t border-line text-lg">
         {type === 'map_pin' ? (
           // Geometry-based, so the same for both grading types. No image here.
           <>
@@ -205,25 +205,25 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
               {item.withinFullPct == null ? '—' : `${item.withinFullPct}%`} within target
             </span>
             <span className="text-fg-muted">·</span>
-            <span className="text-fg-muted">
+            <span className="text-fg">
               {item.averageCredit == null ? '—' : `${Math.round(item.averageCredit * 100)}%`} average credit
             </span>
             <span className="text-fg-muted">·</span>
-            <span className="text-fg-muted">{answeredPct}% responded</span>
+            <span className="text-fg">{answeredPct}% responded</span>
           </>
         ) : gradingType === 'ACCURACY' ? (
           <>
             <span className="text-success-fg font-semibold">{correctCount} correct</span>
             <span className="text-fg-muted">·</span>
-            <span className="text-fg-muted">{correctPct}% accuracy</span>
+            <span className="text-fg">{correctPct}% accuracy</span>
             <span className="text-fg-muted">·</span>
-            <span className="text-fg-muted">{answeredPct}% responded</span>
+            <span className="text-fg">{answeredPct}% responded</span>
           </>
         ) : (
           <>
             <span className="text-warning-fg font-semibold">{totalAnswered} completed</span>
             <span className="text-fg-muted">·</span>
-            <span className="text-fg-muted">{answeredPct}% response rate</span>
+            <span className="text-fg">{answeredPct}% response rate</span>
           </>
         )}
       </div>
@@ -260,18 +260,18 @@ export default function GameOverPage() {
     <div className="min-h-screen flex flex-col items-center p-8 gap-8">
       <div className="text-center">
         <h1 className="text-5xl font-black text-fg">Game Over!</h1>
-        <p className="text-fg-muted mt-2">{playerCount} players · Max possible: {maxPossibleScore.toLocaleString()} pts</p>
+        <p className="text-fg text-lg mt-2">{playerCount} players · Max possible: {maxPossibleScore.toLocaleString()} pts</p>
       </div>
 
       {/* Histogram */}
       <div className="w-full max-w-3xl">
         <p className="text-fg-muted text-sm uppercase tracking-widest text-center mb-4">Score Distribution</p>
-        <div className="flex items-end gap-2 h-48">
+        <div className="flex items-end gap-2 h-56">
           {buckets.map((bucket, i) => {
             const heightPct = (bucket.count / maxCount) * 100;
             return (
               <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                <span className="text-fg text-sm font-semibold">
+                <span className="text-fg text-lg font-semibold">
                   {bucket.count > 0 ? bucket.count : ''}
                 </span>
                 <div className="w-full bg-chart-track rounded-t-lg relative" style={{ height: '160px' }}>
@@ -280,26 +280,26 @@ export default function GameOverPage() {
                     style={{ height: `${Math.max(heightPct, bucket.count > 0 ? 4 : 0)}%` }}
                   />
                 </div>
-                <span className="text-fg-muted text-xs">{bucket.label}</span>
+                <span className="text-fg-muted text-sm">{bucket.label}</span>
               </div>
             );
           })}
         </div>
-        <p className="text-fg-muted text-xs text-center mt-1">Score (points) →</p>
+        <p className="text-fg-muted text-sm text-center mt-1">Score (points) →</p>
       </div>
 
       {/* Summary stats */}
       <div className="flex gap-12 text-center">
         <div>
-          <p className="text-fg-muted text-xs uppercase tracking-widest">Average</p>
+          <p className="text-fg-muted text-sm uppercase tracking-widest">Average</p>
           <p className="text-fg text-2xl font-bold">{avg.toLocaleString()}</p>
         </div>
         <div>
-          <p className="text-fg-muted text-xs uppercase tracking-widest">High Score</p>
+          <p className="text-fg-muted text-sm uppercase tracking-widest">High Score</p>
           <p className="text-fg text-2xl font-bold">{high.toLocaleString()}</p>
         </div>
         <div>
-          <p className="text-fg-muted text-xs uppercase tracking-widest">Players</p>
+          <p className="text-fg-muted text-sm uppercase tracking-widest">Players</p>
           <p className="text-fg text-2xl font-bold">{playerCount}</p>
         </div>
       </div>

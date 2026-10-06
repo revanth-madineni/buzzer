@@ -56,13 +56,14 @@ function WordCloud({ distribution, answerReveal, totalAnswered, totalPlayers }: 
       ? (answerReveal as { type: 'fill_in_the_blank'; acceptedAnswers: string[]; editDistance: number }).editDistance
       : 0;
 
-  function sizeClass(count: number): string {
+  // [size, weight] by share of answers; the smallest is text-xl, readable on the projector.
+  function sizeClass(count: number): [string, string] {
     const f = count / maxCount;
-    if (f > 0.75) return 'text-5xl font-black';
-    if (f > 0.5)  return 'text-4xl font-bold';
-    if (f > 0.25) return 'text-3xl font-semibold';
-    if (f > 0.1)  return 'text-2xl font-medium';
-    return 'text-xl';
+    if (f > 0.75) return ['text-5xl', 'font-black'];
+    if (f > 0.5)  return ['text-4xl', 'font-bold'];
+    if (f > 0.25) return ['text-3xl', 'font-semibold'];
+    if (f > 0.1)  return ['text-2xl', 'font-medium'];
+    return ['text-xl', ''];
   }
 
   function isCorrectWord(word: string): boolean {
@@ -73,35 +74,41 @@ function WordCloud({ distribution, answerReveal, totalAnswered, totalPlayers }: 
   return (
     <div className="w-full max-w-3xl flex flex-col gap-4">
       {isAccuracy && acceptedAnswers.length > 0 && (
-        <p className="text-center text-fg-muted text-base">
+        <p className="text-center text-fg text-lg">
           Correct answer:{' '}
           <span className="text-success-fg font-semibold">
             {(answerReveal as { acceptedAnswers: string[] }).acceptedAnswers.join(' / ')}
             {editDistance > 0 && (
-              <span className="text-fg-muted font-normal text-sm ml-1">(±{editDistance})</span>
+              <span className="text-fg font-normal ml-1">(±{editDistance})</span>
             )}
           </span>
         </p>
       )}
 
       <div className="flex flex-wrap gap-x-5 gap-y-3 justify-center items-center min-h-32 p-4 bg-surface rounded-2xl">
-        {entries.map(([word, count]) => (
-          <span
-            key={word}
-            title={`${count} player${count !== 1 ? 's' : ''}`}
-            className={`${sizeClass(count)} transition-colors ${
-              isCorrectWord(word) ? 'text-success-fg' : 'text-fg'
-            }`}
-          >
-            {word}
-          </span>
-        ))}
+        {entries.map(([word, count]) => {
+          const [size, weight] = sizeClass(count);
+          // Accepted words carry a ✓ and at least bold weight, so colour isn't the only cue.
+          const accepted = isCorrectWord(word);
+          return (
+            <span
+              key={word}
+              title={`${count} player${count !== 1 ? 's' : ''}`}
+              className={`${size} transition-colors ${
+                accepted ? `text-success-fg ${weight === 'font-black' ? weight : 'font-bold'}` : `text-fg ${weight}`
+              }`}
+            >
+              {accepted && '✓ '}
+              {word}
+            </span>
+          );
+        })}
         {entries.length === 0 && (
-          <p className="text-fg-muted text-sm">No answers submitted</p>
+          <p className="text-fg text-lg">No answers submitted</p>
         )}
       </div>
 
-      <p className="text-fg-muted text-sm text-right">
+      <p className="text-fg text-lg text-right">
         {totalAnswered} / {totalPlayers} answered
       </p>
     </div>
@@ -120,44 +127,41 @@ interface BarChartProps {
 
 function AnswerBarChart({ bars, totalAnswered, totalPlayers }: BarChartProps) {
   const maxCount = Math.max(...bars.map(b => b.count), 1);
+  // When any option is correct, every row reserves the "✓ Correct" column, so all tracks are
+  // the same length and the bars stay comparable.
+  const anyCorrect = bars.some(b => b.correct === true);
 
   return (
-    <div className="w-full max-w-2xl space-y-3">
+    <div className="w-full max-w-4xl space-y-3">
       {bars.map((bar, i) => {
         const pct = Math.round((bar.count / maxCount) * 100);
-        const barColor =
-          bar.correct === true
-            ? 'bg-chart-correct'
-            : bar.correct === false
-            ? 'bg-chart-bar'
-            : 'bg-chart-bar';
+        const barColor = bar.correct === true ? 'bg-chart-correct' : 'bg-chart-bar';
 
+        // No text inside the bar: the count and "✓ Correct" sit beside it, on the page.
         return (
-          <div key={i} className="flex items-center gap-3">
-            <span className="text-fg font-bold font-mono w-8 text-right shrink-0">
+          <div key={i} className="flex items-center gap-4">
+            <span className="w-64 shrink-0 text-right text-fg text-xl font-bold break-words">
               {bar.label}
             </span>
             <div className="flex-1 bg-chart-track rounded-full h-10 overflow-hidden">
               <div
-                className={`h-full rounded-full flex items-center justify-end pr-3 transition-all duration-500 ${barColor}`}
+                className={`h-full rounded-full transition-all duration-500 ${barColor}`}
                 style={{ width: `${Math.max(pct, bar.count > 0 ? 4 : 0)}%` }}
-              >
-                {bar.count > 0 && (
-                  <span className="text-on-accent font-bold text-sm">{bar.count}</span>
-                )}
-              </div>
+              />
             </div>
-            {bar.correct === true && (
-              <span className="text-success-fg text-sm font-semibold shrink-0">✓ Correct</span>
-            )}
-            {bar.count === 0 && bar.correct !== true && (
-              <span className="text-fg-muted text-sm shrink-0">0</span>
+            <span className="w-12 shrink-0 text-right text-fg text-lg font-bold tabular-nums">
+              {bar.count}
+            </span>
+            {anyCorrect && (
+              <span className="w-28 shrink-0 text-success-fg text-lg font-semibold">
+                {bar.correct === true ? '✓ Correct' : ''}
+              </span>
             )}
           </div>
         );
       })}
 
-      <p className="text-fg-muted text-sm text-right pt-1">
+      <p className="text-fg text-lg text-right pt-1">
         {totalAnswered} / {totalPlayers} answered
       </p>
     </div>
@@ -266,11 +270,11 @@ export default function ResultsPage() {
         <div className="w-full max-w-4xl flex flex-col gap-2">
           <MapPinHeatmap reveal={mapReveal} distribution={questionResults.answerDistribution} />
           {mapReveal.gradingType === 'COMPLETENESS' && (
-            <p className="text-center text-warning-fg text-base">
+            <p className="text-center text-warning-fg text-lg">
               Participation — full credit for answering
             </p>
           )}
-          <p className="text-fg-muted text-sm text-right">
+          <p className="text-fg text-lg text-right">
             {questionResults.totalAnswered} / {questionResults.totalPlayers} answered
           </p>
         </div>
