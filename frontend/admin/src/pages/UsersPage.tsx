@@ -105,7 +105,7 @@ export default function UsersPage() {
               <div>
                 <span className="font-medium text-fg">{u.display_name ?? u.username ?? u.netid}</span>
                 <span className="text-fg-muted text-sm ml-3">{u.username ?? u.netid}</span>
-                <span className={`ml-3 text-xs px-2 py-0.5 rounded-full ${u.role === 'ADMIN' ? 'bg-accent-soft text-accent-fg' : 'bg-surface-alt text-fg-muted'}`}>
+                <span className={`ml-3 rounded px-1.5 py-0.5 text-xs font-semibold ${u.role === 'ADMIN' ? 'bg-accent-soft text-accent-fg' : 'bg-surface-alt text-fg-muted'}`}>
                   {u.role}
                 </span>
               </div>

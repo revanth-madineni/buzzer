@@ -187,7 +187,7 @@ export default function SessionsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-fg">{s.game_title}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[s.status] ?? 'bg-surface-alt text-fg-muted'}`}>
+                      <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${STATUS_COLORS[s.status] ?? 'bg-surface-alt text-fg-muted'}`}>
                         {statusLabel(s.status)}
                       </span>
                     </div>

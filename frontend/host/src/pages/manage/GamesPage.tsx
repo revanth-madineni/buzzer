@@ -203,7 +203,7 @@ export default function GamesPage() {
                   {g.title}
                   {g.restricted && (
                     <span
-                      className="inline-flex items-center gap-1 rounded bg-warning-soft px-1.5 py-0.5 text-xs font-medium text-warning-fg"
+                      className="inline-flex items-center gap-1 rounded bg-warning-soft px-1.5 py-0.5 text-xs font-semibold text-warning-fg"
                       title="Only hosts an admin granted can use this game"
                     >
                       <Lock size={11} /> Restricted

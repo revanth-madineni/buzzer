@@ -265,12 +265,12 @@ export default function GamesPage() {
                 <p className="font-semibold text-fg flex items-center gap-2">
                   {g.title}
                   {g.restricted && (
-                    <span className="inline-flex items-center gap-1 rounded bg-warning-soft px-1.5 py-0.5 text-xs font-medium text-warning-fg">
+                    <span className="inline-flex items-center gap-1 rounded bg-warning-soft px-1.5 py-0.5 text-xs font-semibold text-warning-fg">
                       <Lock size={11} /> Restricted
                     </span>
                   )}
                   {g.course_id === null && (
-                    <span className="rounded bg-surface-alt px-1.5 py-0.5 text-xs font-medium text-fg-muted">
+                    <span className="rounded bg-surface-alt px-1.5 py-0.5 text-xs font-semibold text-fg-muted">
                       Unassigned
                     </span>
                   )}

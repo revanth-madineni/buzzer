@@ -208,7 +208,7 @@ export default function UserDetailPage() {
               <p className="text-fg-muted text-sm mt-0.5">
                 {user.username && <span className="mr-3">@{user.username}</span>}
                 {user.netid && <span className="mr-3">netid: {user.netid}</span>}
-                <span className="px-2 py-0.5 rounded-full text-xs bg-surface-alt text-fg-muted">{user.role}</span>
+                <span className="rounded px-1.5 py-0.5 text-xs font-semibold bg-surface-alt text-fg-muted">{user.role}</span>
               </p>
             </div>
             <div className="flex gap-2">

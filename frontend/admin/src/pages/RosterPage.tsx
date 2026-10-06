@@ -557,7 +557,7 @@ export default function RosterPage() {
                       <td className="px-4 py-3 font-mono text-xs text-fg">{entry.netid}</td>
                       <td className="px-4 py-3 text-fg-muted">{entry.email}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-semibold ${
                           entry.is_active
                             ? 'bg-success-soft text-success-fg'
                             : 'bg-surface-alt text-fg-muted'

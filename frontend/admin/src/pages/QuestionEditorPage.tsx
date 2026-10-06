@@ -940,10 +940,10 @@ export default function QuestionEditorPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-fg-muted text-xs font-mono">Q{i + 1}</span>
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-surface-alt text-fg-muted">
+                    <span className="rounded px-1.5 py-0.5 text-xs font-semibold bg-surface-alt text-fg-muted">
                       {typeLabel[q.type]}
                     </span>
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-surface-alt text-fg-muted">
+                    <span className="rounded px-1.5 py-0.5 text-xs font-semibold bg-surface-alt text-fg-muted">
                       {q.grading_type}
                     </span>
                     <span className="text-fg-muted text-xs">{q.time_limit_seconds}s \u00b7 {q.points_value}pts</span>
