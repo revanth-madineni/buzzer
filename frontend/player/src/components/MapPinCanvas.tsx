@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { MapCanvas } from './MapCanvas';
-import { drawPin, drawTarget, type DrawRect, type Point } from '../lib/mapPin';
+import { drawPin, drawTarget, mapColor, type DrawRect, type Point } from '../lib/mapPin';
 import type { MapPinReveal } from '../types/game';
 
 interface MapPinCanvasProps {
@@ -39,7 +39,7 @@ export function MapPinCanvas({
         drawTarget(ctx, fit, reveal.target, reveal.fullRadius, reveal.zeroRadius);
         if (myPin) drawPin(ctx, fit, myPin);
       } else if (pin) {
-        drawPin(ctx, fit, pin, disabled ? 'rgb(100, 116, 139)' : undefined);
+        drawPin(ctx, fit, pin, disabled ? mapColor('pin-disabled') : undefined);
       }
     },
     [reveal, myPin, pin, disabled],
