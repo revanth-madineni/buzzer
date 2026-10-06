@@ -862,7 +862,7 @@ and `player-question-multi` were added to this list after the "before" set was t
 have **no before image**. They need only the two "after" images, and their `docs/ui/README.md`
 rows show "—" in the before column. The same applies to `player-gameover`: the committed
 `before/player-gameover.png` shows the **host** game-over screen (histogram, "New Game", QR
-panel), so that row also shows "—" and says why; the file is left as committed.
+panel), so that row also shows "—" and says why, and the mislabelled file is removed.
 
 **Before-image size.** The committed "before" images were captured from a laptop browser window
 (about 1400×680 CSS px at 2×), not at the viewports above; the player ones are desktop-width.
@@ -1147,3 +1147,5 @@ Per `.claude/rules/context-sync.md`, update:
 - 2026-10-05 — Implementation, step 8: `before/player-gameover.png` turned out to be a host
   game-over capture, so `player-gameover` is treated as having no before image (§4.16); 16
   usable before images, 38 after.
+- 2026-10-05 — User decision: the mislabelled `before/player-gameover.png` is removed rather
+  than kept with an explanation.
