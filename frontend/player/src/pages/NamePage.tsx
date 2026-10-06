@@ -69,18 +69,18 @@ export default function NamePage() {
       <ThemeToggle className="fixed top-3 right-3 z-40" />
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <h1 className="text-xl font-bold text-slate-100 text-center">Join Room {code}</h1>
+          <h1 className="text-xl font-bold text-fg text-center">Join Room {code}</h1>
 
           {/* Mode toggle — hidden when already authenticated */}
           {!isAuthenticated && (
-            <div className="flex mt-3 bg-slate-700/50 rounded-xl p-1 gap-1">
+            <div className="flex mt-3 bg-surface-hover rounded-xl p-1 gap-1">
               <button
                 type="button"
                 onClick={() => { setMode('guest'); setError(''); }}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
                   mode === 'guest'
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-accent text-on-accent'
+                    : 'text-fg-muted hover:text-fg'
                 }`}
               >
                 Join as Guest
@@ -90,8 +90,8 @@ export default function NamePage() {
                 onClick={() => { setMode('netid'); setError(''); }}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
                   mode === 'netid' || mode === 'local'
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-accent text-on-accent'
+                    : 'text-fg-muted hover:text-fg'
                 }`}
               >
                 Sign In
@@ -104,7 +104,7 @@ export default function NamePage() {
           {mode === 'guest' && (
             <form onSubmit={handleGuest} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Display Name</label>
+                <label className="block text-sm font-medium text-fg mb-1">Display Name</label>
                 <Input
                   type="text"
                   value={displayName}
@@ -116,7 +116,7 @@ export default function NamePage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Email</label>
+                <label className="block text-sm font-medium text-fg mb-1">Email</label>
                 <Input
                   type="email"
                   value={email}
@@ -125,7 +125,7 @@ export default function NamePage() {
                   required
                 />
               </div>
-              {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+              {error && <p className="text-danger-fg text-sm text-center">{error}</p>}
               <Button
                 type="submit"
                 className="w-full"
@@ -153,17 +153,17 @@ export default function NamePage() {
                 <a
                   href="/api/auth/oauth2-callback?redirect_to=/player/login"
                   onClick={() => sessionStorage.setItem('joinRoomCode', code)}
-                  className="flex items-center justify-center w-full py-3 px-4 rounded-lg font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+                  className="flex items-center justify-center w-full py-3 px-4 rounded-lg font-medium bg-accent hover:bg-accent-hover text-on-accent transition-colors"
                 >
                   Sign in with UW NetID
                 </a>
               )}
-              {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+              {error && <p className="text-danger-fg text-sm text-center">{error}</p>}
               {!isAuthenticated && (
                 <button
                   type="button"
                   onClick={() => { setMode('local'); setError(''); }}
-                  className="w-full text-slate-500 text-sm hover:text-slate-300 transition-colors"
+                  className="w-full text-fg-muted text-sm hover:text-fg transition-colors"
                 >
                   Use local account instead
                 </button>
@@ -190,7 +190,7 @@ export default function NamePage() {
                 autoComplete="current-password"
                 required
               />
-              {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+              {error && <p className="text-danger-fg text-sm text-center">{error}</p>}
               <Button
                 type="submit"
                 className="w-full"
@@ -202,7 +202,7 @@ export default function NamePage() {
               <button
                 type="button"
                 onClick={() => { setMode('netid'); setError(''); }}
-                className="w-full text-slate-500 text-sm hover:text-slate-300 transition-colors"
+                className="w-full text-fg-muted text-sm hover:text-fg transition-colors"
               >
                 ← Back to NetID sign in
               </button>
@@ -212,7 +212,7 @@ export default function NamePage() {
           <button
             type="button"
             onClick={() => navigate('/join')}
-            className="w-full mt-3 text-slate-500 text-sm hover:text-slate-300 transition-colors"
+            className="w-full mt-3 text-fg-muted text-sm hover:text-fg transition-colors"
           >
             ← Different room code
           </button>

@@ -228,8 +228,8 @@ export default function GameLayout() {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <div className="text-center space-y-4">
-          <p className="text-red-400 text-lg">{error}</p>
-          <button className="text-indigo-400 underline" onClick={() => navigate('/join')}>
+          <p className="text-danger-fg text-lg">{error}</p>
+          <button className="text-accent-fg underline" onClick={() => navigate('/join')}>
             Back to Join
           </button>
         </div>
@@ -242,12 +242,12 @@ export default function GameLayout() {
       value={{ phase, gameStatus, roomCode: code, playerCount, hostDisconnected, currentQuestion, questionLocked, lastAnswerData, answerResult, questionResults, gameOver, answerRejected, emitAnswer }}
     >
       {hostDisconnected && phase !== 'gameover' && (
-        <div className="fixed top-0 inset-x-0 bg-yellow-600/90 text-yellow-100 text-center py-2 text-sm z-50">
+        <div className="fixed top-0 inset-x-0 bg-warning text-on-warning text-center py-2 text-sm z-50">
           Host disconnected — waiting for them to reconnect…
         </div>
       )}
       {showRejectedBanner && phase !== 'gameover' && (
-        <div role="status" className="fixed bottom-4 inset-x-4 rounded-xl bg-amber-600/95 text-amber-50 text-center py-3 text-sm font-semibold z-50 shadow-lg">
+        <div role="status" className="fixed bottom-4 inset-x-4 rounded-xl bg-warning text-on-warning text-center py-3 text-sm font-semibold z-50 shadow-lg">
           Too late — your answer wasn't recorded
         </div>
       )}
