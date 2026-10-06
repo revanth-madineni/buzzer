@@ -538,7 +538,7 @@ Work file by file and apply this table.
 | `text-white` on an indigo, red or green fill | text on a fill | `text-on-accent` / `text-on-danger` / `text-on-success` |
 | `bg-indigo-600`, `bg-indigo-500`, `hover:bg-indigo-500` | primary action | `bg-accent hover:bg-accent-hover` |
 | `text-indigo-300`, `-400`, `-700` | link, accent text | `text-accent-fg` |
-| `bg-indigo-900`, `border-indigo-400`/`-500` on a selected admin control (for example the HOST/PLAYER two-button toggle) | selected state on a desktop control | `bg-accent-soft text-accent-fg border-accent` |
+| `bg-indigo-600 text-white` on the selected segment of an admin choice control: the HOST/PLAYER two-button toggle (`UserDetailPage`), and the export-format buttons (`SessionsPage`, also `border-indigo-500`) | selected state on a desktop control | `bg-accent text-on-accent` (plus `border-accent` where the control has its own border), and a **✓ before the selected label**, so selection isn't shown by colour alone. Unselected: `text-fg-muted enabled:hover:text-fg`, or `border-line-strong text-fg enabled:hover:bg-surface-hover` for bordered buttons. (`accent-soft` is not used for selection: it is 1.1–1.2:1 against the surfaces.) |
 | `accent-indigo-500` | native checkbox or slider | remove; the base `accent-color` covers it |
 | any `focus:*` colour or offset class, `outline-none` | focus | remove (§4.10) |
 | `text-green-300`, `-400`, `-500` | success or correct text | `text-success-fg` |
@@ -663,8 +663,9 @@ Work file by file and apply this table.
 - **Native controls.** Raw `<select>`, `<textarea>` and checkboxes get `bg-surface-alt
   border-line-strong text-fg`. `color-scheme` (§4.4) makes their drop-down lists follow the
   theme.
-- **The sidebar** is `bg-surface border-r border-line`. The active link is `bg-accent-soft
-  text-accent-fg`.
+- **The sidebar** (here and in the host's `HostLayout`) is `bg-surface border-r border-line`.
+  The active link is `bg-accent text-on-accent`, as it is today; `accent-soft` would be 1.1:1
+  against the sidebar in dark.
 
 ### 4.13 Canvas and map code
 
@@ -711,6 +712,7 @@ also carry text, a glyph or position.
 | player `GameOverPage` recap | audit during the sweep | if correctness is shown by colour only, add ✓ / ✗ |
 | player multi-select | selected options show ✓ in place of the letter | none (§4.11) |
 | host lobby auto-advance switch | knob position | none |
+| admin HOST/PLAYER toggle, export-format buttons | accent fill on the selected segment | add "✓ " before the selected label (§4.11) |
 | `TimerBar` (both) | bar width plus "Ns" label | none. The "Ns" label is the main signal and uses `text-fg-muted` (the stage value on the host). The bands are also checked at 3:1 against the track (§4.15), so the bar is readable without the label. |
 
 ### 4.15 `scripts/check_theme.py` (new) — a manual gate
@@ -1127,3 +1129,10 @@ Per `.claude/rules/context-sync.md`, update:
   hover classes become `enabled:hover:…`. Replacing `disabled:pointer-events-none` with the
   standard `disabled:cursor-not-allowed` had made disabled buttons react to hover. Hover
   overrides passed to a `Button` must use `enabled:hover:` too (§4.11, disabled state).
+- 2026-10-05 — Implementation review during step 5 (user decision): the §4.11 row for
+  selected admin controls described the HOST/PLAYER toggle as `bg-indigo-900` (it is
+  `bg-indigo-600 text-white`) and mapped it to `accent-soft`, which is 1.1–1.2:1 against the
+  surfaces in both themes, so the selected segment would barely show. Selected segments are now
+  `bg-accent text-on-accent` with a ✓ before the label (§4.11, §4.14); the accent fill alone is
+  2.3–2.8:1 against dark surfaces, so the ✓ carries the state. Both sidebars' active link also
+  uses the accent fill (§4.12).
