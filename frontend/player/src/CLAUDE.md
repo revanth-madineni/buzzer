@@ -8,11 +8,24 @@ leaderboard, and answer distributions are on the host's big screen.
 
 ## Contents
 Top-level files:
-- `main.tsx` — Mounts `<App />` in `StrictMode` and imports `index.css`.
+- `main.tsx` — Imports `theme.css` then `index.css`, calls `initTheme()` (`lib/theme.ts`)
+  before `createRoot`, and mounts `<App />` in `StrictMode`.
 - `App.tsx` — `react-router` routes under basename `import.meta.env.BASE_URL` (`/player/` in
   production, `/` in dev): `/join`, `/login`, `/name/:code`, and `/game/:code/{lobby,question,
   feedback,results,gameover}` nested under `GameLayout`. Anything else redirects to `/join`.
-- `index.css` — Tailwind directives and global styles.
+- `theme.css` (T9) — the colour tokens as RGB-channel CSS variables: invariant tokens
+  (including the eight answer colours and their text colours), dark values (also the
+  fallback), and light values. Byte-identical to the admin app's; its block selectors are
+  parsed literally by `scripts/check_theme.py`.
+- `index.css` — Tailwind directives and the token-based base rules: page background and text
+  colour, placeholders, `accent-color`, the one global `:focus-visible` outline, the
+  `data-fill` rules and the `.focus-inset` utility. Player only: no tap highlight, and
+  `touch-action: manipulation` on buttons (no double-tap-zoom delay).
+- `../index.html` — declares `<html data-theme-key="buzzer:theme:player">` (the only place
+  the key is written) and runs a small inline script that sets `data-theme` before first
+  paint, which must agree with `lib/theme.ts`. The viewport allows pinch zoom
+  (`width=device-width, initial-scale=1.0`; T9 removed `maximum-scale` and
+  `user-scalable=no`).
 - `types/game.ts` — TypeScript shapes for socket payloads (`SyncStatePayload`,
   `QuestionPayload`, `AnswerResultPayload`, `PlayerResultsPayload`, `PlayerAnswerReveal`,
   `PlayerGameOverPayload`, …) and `PlayerPhase`. T7 added `QuestionType` incl. `map_pin`,
@@ -22,8 +35,8 @@ Top-level files:
 Subdirectories (each has its own `CLAUDE.md`):
 | dir | role |
 |---|---|
-| `lib/` | `api.ts` REST wrapper (Bearer token from `localStorage.token`), `cn()`, `isTokenExpired()`, `mapPin.ts` (map geometry), `images.ts` (authenticated image loading with a one-shot refresh). |
-| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the client-side `TimerBar`, and the map-pin canvas (`MapCanvas`, `MapPinCanvas`). |
+| `lib/` | `api.ts` REST wrapper (Bearer token from `localStorage.token`), `cn()`, `isTokenExpired()`, `mapPin.ts` (map geometry, `mapColor`), `images.ts` (authenticated image loading with a one-shot refresh), `theme.ts` (the theme store). |
+| `components/` | `ui/` primitives (`Button`, `Card`, `Input`), the client-side `TimerBar`, the map-pin canvas (`MapCanvas`, `MapPinCanvas`), and `ThemeToggle`. |
 | `pages/` | Route components. `game/GameLayout.tsx` owns the socket and shares game state via `useGame()`. |
 
 ## How it fits together
@@ -31,6 +44,7 @@ Dependency direction: `pages/` → `components/` + `lib/` + `types/`. There's no
 All live-game state is React state in `GameLayout`, exposed through context. The only
 persistent client state is in `localStorage`:
 - `token`: shared with the host and admin apps, see Gotchas.
+- `buzzer:theme:player`: the theme choice (T9), separate from the host's and admin's.
 - `playerName` / `playerEmail`: guest pre-fill.
 - `sessionStorage.joinRoomCode`: survives the OAuth2 round trip.
 - `sessionStorage['buzzer:pin:{code}:{questionId}']`: an accepted map pin, so results can show
@@ -100,5 +114,8 @@ Most important cross-cutting issues. Details are in each subdirectory's file.
   `hasAnswered`, and `yourScore`, all of which the server sends. Nothing is generated from the
   backend, and the event names are string literals duplicated from
   `backend/app/websocket/events.py`.
+- **Colours come only from theme tokens.** The Tailwind palette is replaced, so a leftover raw
+  class compiles to nothing, with no error. Run `python scripts/check_theme.py` before an MR;
+  it isn't in CI. See `frontend/CLAUDE.md`.
 - `StrictMode` double-runs effects in dev, so `GameLayout` connects, disconnects, and reconnects
   on mount. Expect a `player_left` / `player_joined` blip on the host screen in development only.

@@ -47,6 +47,25 @@ Uses `lib/api.ts` + `lib/utils.ts` (see `lib/CLAUDE.md`) and `components/ui/*` (
 `components/CLAUDE.md`). Payload types are in `../types/game.ts`. The socket protocol and phase
 machine are defined server-side in `backend/app/websocket/CLAUDE.md`.
 
+### Theme (T9)
+- **Where the toggle renders.** `JoinPage`, `NamePage`, and the game's `LobbyPage`,
+  `FeedbackPage`, `ResultsPage` (all three of its root views) and `GameOverPage` (both) render
+  `ThemeToggle` at `fixed top-3 right-3 z-40`. Each of those root views adds `pt-16`, so
+  content never slides under it. It is deliberately **not** on `QuestionPage` (no mis-taps
+  during a timed answer), `LoginPage` or the `GameLayout` error view. The banners (`z-50`) cover
+  it while they show.
+- **Answer colours.** `QuestionPage`'s `OPTION_COLORS` are literal
+  `bg-answer-N text-on-answer-N border-answer-N` strings. Keep them literal, or Tailwind won't
+  find them. Each colour has its own text colour (dark on yellow 3 and orange 6, white
+  otherwise); True/False use `answer-4` / `answer-1`. They have no hover shades, which stick on
+  touch screens. Disabled buttons keep their colours and add `opacity-50`.
+- **Multi-select.** Unselected options are `surface` / `line-strong` / `fg`. A selected option
+  is `accent` with an `on-accent` border, and its check square shows ✓ instead of the letter,
+  so selection isn't colour-only.
+- **Other screens.** The fill-in input sits on the page, so it is `surface` with a
+  `line-strong` border. Both banners are `bg-warning text-on-warning`; if one ever gets a button
+  or link, add `data-fill="warning"`. The game-over recap marks each answer with ✓ / ✗ / ● / —.
+
 ### Event → navigation (GameLayout)
 | server event | effect |
 |---|---|

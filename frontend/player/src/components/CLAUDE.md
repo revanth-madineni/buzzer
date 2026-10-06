@@ -2,17 +2,23 @@
 
 ## Purpose
 Presentational building blocks for the player (mobile) app: three shadcn-style primitives
-styled with Tailwind for the dark slate theme and the per-question countdown bar (under
-`ui/`), plus the map-pin canvas (T7). No socket access or game state here; the map canvas
+and the per-question countdown bar (under `ui/`), the theme toggle (T9), plus the map-pin
+canvas (T7). Everything is styled with the theme tokens, so it works in both themes
+(`frontend/CLAUDE.md` "Theme system"). No socket access or game state here; the map canvas
 loads its image through `lib/images.ts`.
 
 ## Contents
-- `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default | outline | ghost |
-  destructive`) and `size` (`sm | md | lg`). Class names are merged via `cn` from `lib/utils`.
-- `ui/card.tsx` — `Card`, `CardHeader`, `CardContent`: styled `<div>` wrappers.
-- `ui/input.tsx` — `Input`: styled native `<input>`, full width.
+- `ui/button.tsx` — `Button`: native `<button>` with `variant` (`default` accent fill,
+  `outline` line-strong border, `ghost`, `destructive` danger fill) and `size` (`sm | md |
+  lg`). Class names are merged via `cn` from `lib/utils`. Hover classes are `enabled:hover:…`,
+  so a disabled button (opacity-50, not-allowed cursor) doesn't react to hover.
+- `ui/card.tsx` — `Card`, `CardHeader`, `CardContent`: `<div>` wrappers; the card is an opaque
+  `surface` with a `line` border.
+- `ui/input.tsx` — `Input`: native `<input>`, full width, `surface-alt` with a `line-strong`
+  border (a recessed control, meant to sit inside a `surface`).
 - `ui/TimerBar.tsx` — `TimerBar({ totalSeconds, paused })`: client-side countdown bar
-  (green > 60 % → yellow > 30 % → red) with a whole-second label. Ticks every 100 ms from
+  (`timer-ok` > 60 % → `timer-warn` > 30 % → `timer-low`, on a `chart-track` track) with a
+  whole-second `fg-muted` label. Ticks every 100 ms from
   `Date.now()` at mount. While `paused`, it freezes the remaining time and resumes from it.
 
 - `MapCanvas.tsx` (T7) — the shared map canvas, **byte-identical in all three apps**. Draws
@@ -21,11 +27,17 @@ loads its image through `lib/images.ts`.
   orientation change. Shows "Loading map…", or "Couldn't load the map" + Retry. Overlays come
   from a `draw(ctx, fit)` prop (re-run when its identity changes, so pass a `useCallback`).
   With `onPoint`, it's interactive: a gesture that **starts** in the letterbox is ignored, a
-  drag is clamped to the image, and `touch-action: none` is set on the canvas only.
+  drag is clamped to the image, and `touch-action: none` is set on the canvas only. Only its
+  chrome is themed (`surface-alt` letterbox, `fg-muted` loading, `danger-fg` error, a
+  `line-strong` Retry); the image and overlays look the same in both themes.
 - `MapPinCanvas.tsx` (T7) — the player's map on top of `MapCanvas`. Interactive (`pin`,
   `onPinChange`, `disabled`): tap places the pin, tap/drag moves it, the marker tip sits on
   the point. Reveal (`reveal`, `myPin`): target dot, solid `fullRadius` and dashed
-  `zeroRadius` circles (r × drawW pixels), and the player's own pin.
+  `zeroRadius` circles (r × drawW pixels), and the player's own pin. While `disabled`, the pin
+  is drawn in `mapColor('pin-disabled')` (`lib/mapPin.ts`).
+- `ThemeToggle.tsx` (T9) — **byte-identical in all three apps**. A 44×44 `<button>` using
+  `useTheme()` (`lib/theme.ts`); its icon, `title`, `aria-label` and optional visible label
+  all name the theme it switches **to**. `className` is for placement only.
 
 ## How it fits in
 - `JoinPage` and `NamePage` use `Button`, `Input`, and `Card*`. `GameOverPage` uses `Button`.
@@ -34,6 +46,9 @@ loads its image through `lib/images.ts`.
   is what remounts it for each new question.
 - `lib/utils.ts` supplies `cn`. See `lib/CLAUDE.md`.
 - `QuestionPage`'s map_pin branch and `ResultsPage` use `MapPinCanvas`.
+- `ThemeToggle` is rendered by `JoinPage`, `NamePage` and the game's `LobbyPage`,
+  `FeedbackPage`, `ResultsPage` and `GameOverPage`, never by `QuestionPage`
+  (`pages/CLAUDE.md`).
 
 ## Gotchas
 - **`TimerBar` is display-only and not synced to the server.** The server decides when
@@ -51,6 +66,12 @@ loads its image through `lib/images.ts`.
   bar width.
 - `Button` doesn't default `type`, so inside a `<form>` it acts as `type="submit"`. Pass
   `type="button"` for non-submit buttons.
+- **A `className` hover override on a `Button` must use `enabled:hover:`.** The variant's
+  `enabled:hover:` rule has higher specificity than a plain `hover:`, which would lose.
+- **Colours come only from the theme tokens.** The Tailwind palette is replaced, so a raw class
+  such as `bg-slate-800` compiles to nothing, with no error; run `scripts/check_theme.py`.
+- **No per-component focus styles.** Focus comes from the global `:focus-visible` outline in
+  `../index.css`; don't add `focus:ring-*` or `outline-none`.
 - **The map canvas is untested in a browser by automation.** No test runner; verify pointer,
   drag, DPR and Retry behaviour by hand on a phone after changing it.
 - The primitives are copies local to the player app. The host and admin apps have their own
