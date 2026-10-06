@@ -10,6 +10,7 @@ import GamesPage from './pages/GamesPage';
 import QuestionEditorPage from './pages/QuestionEditorPage';
 import SessionsPage from './pages/SessionsPage';
 import AccessPage from './pages/AccessPage';
+import { ThemeToggle } from './components/ThemeToggle';
 
 function RequireAdmin() {
   const token = localStorage.getItem('token');
@@ -63,7 +64,8 @@ function AdminLayout() {
             <UserX size={16} /> Guests
           </NavLink>
         </nav>
-        <div className="p-3 border-t border-slate-700">
+        <div className="p-3 border-t border-slate-700 space-y-1">
+          <ThemeToggle showLabel className="w-full justify-start gap-3 px-4" />
           <button
             onClick={logout}
             className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 hover:text-slate-100 w-full transition-colors"

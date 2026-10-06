@@ -5,6 +5,7 @@ import { isTokenExpired } from '../lib/utils';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
+import { ThemeToggle } from '../components/ThemeToggle';
 
 type Mode = 'guest' | 'netid' | 'local';
 
@@ -64,7 +65,8 @@ export default function NamePage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
+    <div className="min-h-screen flex items-center justify-center p-4 pt-16">
+      <ThemeToggle className="fixed top-3 right-3 z-40" />
       <Card className="w-full max-w-sm">
         <CardHeader>
           <h1 className="text-xl font-bold text-slate-100 text-center">Join Room {code}</h1>

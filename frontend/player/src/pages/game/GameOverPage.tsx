@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import type { PlayerAnswerReveal, QuestionSummaryItem } from '../../types/game';
+import { ThemeToggle } from '../../components/ThemeToggle';
 
 function describePlayerAnswer(
   playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[] } | null,
@@ -130,7 +131,8 @@ export default function GameOverPage() {
 
   if (!gameOver) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center pt-16">
+        <ThemeToggle className="fixed top-3 right-3 z-40" />
         <p className="text-slate-400">Loading final results…</p>
       </div>
     );
@@ -139,7 +141,8 @@ export default function GameOverPage() {
   const { yourFinalScore, yourFinalRank, playerCount, questionSummary } = gameOver;
 
   return (
-    <div className="min-h-screen flex flex-col p-4 gap-5">
+    <div className="min-h-screen flex flex-col p-4 gap-5 pt-16">
+      <ThemeToggle className="fixed top-3 right-3 z-40" />
       <div className="text-center pt-4 pb-2">
         <h1 className="text-4xl font-black text-slate-100">Game Over!</h1>
         <div className="mt-3 flex items-baseline justify-center gap-3">

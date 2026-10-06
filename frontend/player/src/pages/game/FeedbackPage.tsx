@@ -1,6 +1,9 @@
+import { ThemeToggle } from '../../components/ThemeToggle';
+
 export default function FeedbackPage() {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-6 text-center">
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-6 text-center pt-16">
+      <ThemeToggle className="fixed top-3 right-3 z-40" />
       <div className="text-6xl">🔒</div>
       <p className="text-slate-100 text-2xl font-bold">Answer locked in!</p>
       <div className="flex justify-center mt-2">

@@ -2,6 +2,7 @@ import { pinStorageKey, useGame } from './GameLayout';
 import { MapPinCanvas } from '../../components/MapPinCanvas';
 import { mapPinDistance, type Point } from '../../lib/mapPin';
 import type { MapPinReveal, PlayerResultsPayload } from '../../types/game';
+import { ThemeToggle } from '../../components/ThemeToggle';
 
 function asPin(value: unknown): Point | null {
   if (!value || typeof value !== 'object') return null;
@@ -38,7 +39,8 @@ function MapPinResults({
 }) {
   const label = mapPinLabel(reveal, pin);
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4 gap-4 text-center">
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 gap-4 text-center pt-16">
+      <ThemeToggle className="fixed top-3 right-3 z-40" />
       <p className={`text-3xl font-black ${label.className}`}>
         {label.text}
         {reveal.gradingType === 'COMPLETENESS' && (
@@ -96,7 +98,8 @@ export default function ResultsPage() {
 
   if (!questionResults) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center pt-16">
+        <ThemeToggle className="fixed top-3 right-3 z-40" />
         <p className="text-slate-400">Loading results…</p>
       </div>
     );
@@ -123,7 +126,8 @@ export default function ResultsPage() {
     isFitb && 'acceptedAnswers' in answerReveal ? answerReveal.acceptedAnswers : [];
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-5 text-center">
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-5 text-center pt-16">
+      <ThemeToggle className="fixed top-3 right-3 z-40" />
 
       {/* Correct / Wrong / Recorded */}
       {isCompleteness ? (

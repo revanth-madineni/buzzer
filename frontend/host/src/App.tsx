@@ -23,6 +23,7 @@ import GamesPage from './pages/manage/GamesPage';
 import QuestionEditorPage from './pages/manage/QuestionEditorPage';
 import RosterPage from './pages/manage/RosterPage';
 import SessionsPage from './pages/manage/SessionsPage';
+import { ThemeToggle } from './components/ThemeToggle';
 
 interface Course { id: number; name: string; semester: string }
 
@@ -97,6 +98,7 @@ function HostLayout() {
           <NavLink to="/home" className={linkClass}>
             <Play size={16} /> Play
           </NavLink>
+          <ThemeToggle showLabel className="w-full justify-start gap-3 px-4" />
           <button
             onClick={logout}
             className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 hover:text-slate-100 w-full transition-colors"

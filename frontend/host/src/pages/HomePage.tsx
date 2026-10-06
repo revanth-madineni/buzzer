@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
+import { ThemeToggle } from '../components/ThemeToggle';
 
 interface Course { id: number; name: string; semester: string }
 interface Game { id: number; title: string; course_id: number | null }
@@ -88,6 +89,7 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 gap-4">
+      <ThemeToggle className="fixed top-4 right-4 z-40" />
       {activeSessions.length > 0 && (
         <Card className="w-full max-w-lg border-amber-500/40">
           <CardHeader>
