@@ -28,6 +28,14 @@ from ..schemas.admin import is_valid_number
 from ..schemas.game import ScoreResult
 from . import access_service as access
 from . import state_service as state
+from .slider_math import (
+    slider_bin,
+    slider_distance,
+    slider_geometry,
+    slider_index,
+    slider_target_index,
+    slider_value,
+)
 
 logger = structlog.get_logger()
 
@@ -427,7 +435,7 @@ def map_pin_distance(
 
 
 def map_pin_fraction(d: float, full_radius: float, zero_radius: float) -> float:
-    """1 within fullRadius, linear falloff to 0 at zeroRadius."""
+    """1 within fullRadius, linear falloff to 0 at zeroRadius. Slider uses it too."""
     if d <= full_radius:
         return 1.0
     if d >= zero_radius:
@@ -475,6 +483,77 @@ def map_pin_stats(config: dict, answer_data: dict, answers: list) -> dict:
         "withinFullPct": round(100 * within / len(clicks), 1),
         "averageCredit": round(credit / len(clicks), 3),
     }
+
+
+# ---------------------------------------------------------------------------
+# Slider (T7 slider spec §4.3). The geometry lives in `slider_math`; these are the
+# pieces that need map_pin_fraction or the question row.
+# ---------------------------------------------------------------------------
+
+
+def slider_answer_index(config: dict, answer: object) -> int | None:
+    """The snapped index of a player answer, only for exactly {"value": number}."""
+    if not isinstance(answer, dict) or set(answer) != {"value"}:
+        return None
+    return slider_index(config, answer["value"])
+
+
+def _slider_radii(answer_data: dict) -> tuple[float, float] | None:
+    full, zero = answer_data.get("fullRadius"), answer_data.get("zeroRadius")
+    if not (is_valid_number(full) and is_valid_number(zero)):
+        return None
+    return float(full), float(zero)
+
+
+def slider_reveal(grading_type: str, config: dict, answer_data: dict) -> dict:
+    """The one slider reveal, for both grading types. Every key always present;
+    `target` is the canonical value of the target's index."""
+    kt = slider_target_index(config, answer_data)
+    return {
+        "type": "slider",
+        "gradingType": grading_type,
+        "min": config.get("min"),
+        "max": config.get("max"),
+        "step": config.get("step"),
+        "showValue": config.get("showValue", True),
+        "unit": config.get("unit"),
+        "minLabel": config.get("minLabel"),
+        "maxLabel": config.get("maxLabel"),
+        "target": slider_value(config, kt) if kt is not None else None,
+        "fullRadius": answer_data.get("fullRadius"),
+        "zeroRadius": answer_data.get("zeroRadius"),
+    }
+
+
+def slider_stats(config: dict, answer_data: dict, answers: list) -> dict:
+    """withinFullPct (0–100, 1 dp) and averageCredit (0–1, 3 dp), from geometry only,
+    like map_pin_stats. Both None when no answer has a valid value."""
+    geometry = slider_geometry(config)
+    kt = slider_target_index(config, answer_data)
+    radii = _slider_radii(answer_data)
+    indices = [
+        k for k in (slider_answer_index(config, a) for a in answers) if k is not None
+    ]
+    if geometry is None or kt is None or radii is None or not indices:
+        return {"withinFullPct": None, "averageCredit": None}
+    n_steps = geometry[3]
+    full, zero = radii
+    distances = [slider_distance(n_steps, k, kt) for k in indices]
+    within = sum(1 for d in distances if d <= full)
+    credit = sum(map_pin_fraction(d, full, zero) for d in distances)
+    return {
+        "withinFullPct": round(100 * within / len(indices), 1),
+        "averageCredit": round(credit / len(indices), 3),
+    }
+
+
+def slider_dist_key(config: dict, answer: object) -> str | None:
+    """Histogram bin of a player answer, or None for a bad question or answer."""
+    geometry = slider_geometry(config)
+    k = slider_answer_index(config, answer)
+    if geometry is None or k is None:
+        return None
+    return slider_bin(geometry[3], k)
 
 
 ImageRole = Literal["map", "prompt", "option"]
@@ -567,6 +646,29 @@ def _score_map_pin(question: Question, answer_data: dict) -> ScoreResult:
     )
 
 
+def _score_slider(question: Question, answer_data: dict) -> ScoreResult:
+    """ACCURACY slider. Defensive like _score_map_pin: bad data scores 0, never raises."""
+    config = question.config or {}
+    geometry = slider_geometry(config)
+    kt = slider_target_index(config, question.answer_data or {})
+    radii = _slider_radii(question.answer_data or {})
+    if geometry is None or kt is None or radii is None:
+        logger.warning("slider_bad_question", question_id=question.id)
+        return ScoreResult(points_awarded=0, is_correct=False)
+    k = slider_answer_index(config, answer_data)
+    if k is None:
+        logger.warning("slider_bad_answer", question_id=question.id)
+        return ScoreResult(points_awarded=0, is_correct=False)
+    full, zero = radii
+    d = slider_distance(geometry[3], k, kt)
+    return ScoreResult(
+        points_awarded=round(
+            question.points_value * map_pin_fraction(d, full, zero), 2
+        ),
+        is_correct=d <= full,
+    )
+
+
 def calculate_score(question: Question, answer_data: dict) -> ScoreResult:
     """
     Calculate points for a player's answer.
@@ -582,6 +684,8 @@ def calculate_score(question: Question, answer_data: dict) -> ScoreResult:
     # ACCURACY
     if question.type == "map_pin":
         return _score_map_pin(question, answer_data)
+    if question.type == "slider":
+        return _score_slider(question, answer_data)
 
     if question.type == "multiple_choice":
         selected = answer_data.get("selectedIndex")
@@ -697,6 +801,8 @@ async def record_answer(
         click = map_pin_click(answer_data)
         if click is not None:
             dist_key = map_pin_bucket(*click)
+    elif question.type == "slider":
+        dist_key = slider_dist_key(question.config or {}, answer_data)
     elif question.type == "multi_select":
         indices = answer_data.get("selectedIndices")
         if isinstance(indices, list):
@@ -792,6 +898,8 @@ async def get_player_question_summary(
 
         if q_type == "map_pin":
             reveal: dict = map_pin_reveal(grading_type, r.config or {}, q_ans)
+        elif q_type == "slider":
+            reveal = slider_reveal(grading_type, r.config or {}, q_ans)
         elif grading_type == "COMPLETENESS":
             reveal = {"type": "completeness"}
         elif q_type == "multiple_choice":
@@ -904,6 +1012,8 @@ async def get_host_question_summary(
 
         if q_type == "map_pin":
             reveal: dict = map_pin_reveal(grading_type, q["config"], q_ans)
+        elif q_type == "slider":
+            reveal = slider_reveal(grading_type, q["config"], q_ans)
         elif grading_type == "COMPLETENESS":
             reveal = {"type": "completeness"}
         elif q_type == "multiple_choice":
@@ -958,6 +1068,10 @@ async def get_host_question_summary(
                     if click is not None:
                         k = map_pin_bucket(*click)
                         dist[k] = dist.get(k, 0) + 1
+                elif q_type == "slider":
+                    k = slider_dist_key(q["config"], ans)
+                    if k is not None:
+                        dist[k] = dist.get(k, 0) + 1
                 elif q_type == "multi_select":
                     indices = ans.get("selectedIndices")
                     if isinstance(indices, list):
@@ -989,6 +1103,10 @@ async def get_host_question_summary(
         if q_type == "map_pin":
             entry.update(
                 map_pin_stats(q["config"], q_ans, [s["player_answer"] for s in scores])
+            )
+        elif q_type == "slider":
+            entry.update(
+                slider_stats(q["config"], q_ans, [s["player_answer"] for s in scores])
             )
         result.append(entry)
 

@@ -13,6 +13,15 @@ from pydantic import (
     model_validator,
 )
 
+from ..services.slider_math import (
+    SLIDER_MAX_ABS,
+    SLIDER_MAX_STEPS,
+    SLIDER_MIN_FULL_RADIUS,
+    decimals,
+    slider_geometry,
+    slider_on_grid,
+)
+
 # ---------------------------------------------------------------------------
 # Courses
 # ---------------------------------------------------------------------------
@@ -134,7 +143,7 @@ class GameMoveRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 QUESTION_TYPE_PATTERN = (
-    "^(multiple_choice|true_false|fill_in_the_blank|multi_select|map_pin)$"
+    "^(multiple_choice|true_false|fill_in_the_blank|multi_select|map_pin|slider)$"
 )
 
 # map_pin limits (T7 spec §4.5). Radii are in image-width units.
@@ -244,6 +253,90 @@ def _validate_map_pin(config: dict, answer_data: dict) -> None:
         )
 
 
+SLIDER_CONFIG_KEYS = {
+    "min",
+    "max",
+    "step",
+    "showValue",
+    "unit",
+    "minLabel",
+    "maxLabel",
+    "promptImageId",
+}
+SLIDER_MAX_UNIT = 20
+SLIDER_MAX_LABEL = 40
+
+
+def _validate_slider(config: dict, answer_data: dict) -> None:
+    """Same rules for both grading types: both show the same reveal (slider spec §4.1).
+    The geometry checks go through `services/slider_math`, the helpers scoring uses."""
+    extra = set(config) - SLIDER_CONFIG_KEYS
+    if extra:
+        raise ValueError(f"slider config has unknown keys: {sorted(extra)}")
+    lo, hi, step = config.get("min"), config.get("max"), config.get("step")
+    for key, v in (("min", lo), ("max", hi), ("step", step)):
+        if not is_valid_number(v):
+            raise ValueError(f"slider config.{key} must be a number")
+    for key, v in (("min", lo), ("max", hi)):
+        if abs(v) > SLIDER_MAX_ABS:
+            raise ValueError(f"slider config.{key} must be between -1e9 and 1e9")
+    if hi <= lo:
+        raise ValueError("slider config.max must be greater than min")
+    if step <= 0:
+        raise ValueError("slider config.step must be greater than 0")
+    for key, v in (("min", lo), ("step", step)):
+        if decimals(v) is None:
+            raise ValueError(f"slider config.{key} must have at most 6 decimals")
+    if slider_geometry(config) is None:
+        raise ValueError(
+            f"slider range must be a whole number of steps, at most {SLIDER_MAX_STEPS}"
+        )
+    show_value = config.get("showValue", True)
+    if not isinstance(show_value, bool):
+        raise ValueError("slider config.showValue must be true or false")  # noqa: TRY004 (pydantic needs ValueError)
+    if "unit" in config:
+        unit = config["unit"]
+        if not isinstance(unit, str) or not 1 <= len(unit.strip()) <= SLIDER_MAX_UNIT:
+            raise ValueError(
+                f"slider config.unit must be 1–{SLIDER_MAX_UNIT} characters"
+            )
+    labels = [k for k in ("minLabel", "maxLabel") if k in config]
+    if len(labels) == 1:
+        raise ValueError("slider minLabel and maxLabel must be given together")
+    for key in labels:
+        label = config[key]
+        if (
+            not isinstance(label, str)
+            or not 1 <= len(label.strip()) <= SLIDER_MAX_LABEL
+        ):
+            raise ValueError(
+                f"slider config.{key} must be 1–{SLIDER_MAX_LABEL} characters"
+            )
+    if not show_value and not labels:
+        raise ValueError("slider with showValue false needs minLabel and maxLabel")
+
+    extra = set(answer_data) - {"target", "fullRadius", "zeroRadius"}
+    if extra:
+        raise ValueError(f"slider answer_data has unknown keys: {sorted(extra)}")
+    target = answer_data.get("target")
+    if not is_valid_number(target):
+        raise ValueError("slider answer_data.target must be a number")
+    if not slider_on_grid(config, target):
+        raise ValueError(
+            "slider target must be in range and on a step (min + a whole number of steps)"
+        )
+    full = answer_data.get("fullRadius")
+    zero = answer_data.get("zeroRadius")
+    if not is_valid_number(full) or not SLIDER_MIN_FULL_RADIUS <= full < 1:
+        raise ValueError(
+            f"slider fullRadius must be a number from {SLIDER_MIN_FULL_RADIUS} to below 1"
+        )
+    if not is_valid_number(zero) or not full < zero <= 1:
+        raise ValueError(
+            "slider zeroRadius must be a number greater than fullRadius and at most 1"
+        )
+
+
 class QuestionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: str = Field(..., pattern=QUESTION_TYPE_PATTERN)
@@ -313,6 +406,8 @@ class QuestionCreate(BaseModel):
                     raise ValueError("answer_points values must be numbers")
         if self.type == "map_pin":
             _validate_map_pin(self.config, self.answer_data)
+        if self.type == "slider":
+            _validate_slider(self.config, self.answer_data)
         _validate_question_images(self.type, self.config)
         return self
 

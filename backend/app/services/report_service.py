@@ -31,8 +31,17 @@ from .game_service import (
     map_pin_reveal,
     map_pin_stats,
     question_image_ids,
+    slider_dist_key,
+    slider_reveal,
+    slider_stats,
 )
-
+from .slider_math import (
+    format_number,
+    slider_bins,
+    slider_geometry,
+    slider_index,
+    slider_target_line,
+)
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -59,6 +68,8 @@ def _answer_reveal(q: Question) -> dict:
     """Mirror of gateway._answer_reveal — derive correct-answer facts from answer_data."""
     if q.type == "map_pin":  # before COMPLETENESS: both grading types get the map
         return map_pin_reveal(q.grading_type, q.config or {}, q.answer_data or {})
+    if q.type == "slider":  # before COMPLETENESS: both grading types get the scale
+        return slider_reveal(q.grading_type, q.config or {}, q.answer_data or {})
     if q.grading_type == "COMPLETENESS":
         return {"type": "completeness"}
     if q.type == "multiple_choice":
@@ -82,7 +93,9 @@ def _answer_reveal(q: Question) -> dict:
     return {}
 
 
-def _extract_answer_key(q_type: str, answer_data: dict | None) -> str | None:
+def _extract_answer_key(
+    q_type: str, config: dict | None, answer_data: dict | None
+) -> str | None:
     """Convert a player's answer_data blob into the distribution key used for charting."""
     if not answer_data:
         return None
@@ -99,6 +112,9 @@ def _extract_answer_key(q_type: str, answer_data: dict | None) -> str | None:
         # The same bucket as the live distribution (game_service.map_pin_bucket).
         click = map_pin_click(answer_data)
         return map_pin_bucket(*click) if click else None
+    if q_type == "slider":
+        # The same bin as the live distribution (game_service.slider_dist_key).
+        return slider_dist_key(config or {}, answer_data)
     return None
 
 
@@ -372,6 +388,74 @@ def _render_map_pin(reveal: dict, dist: dict[str, int], image: Image | None) -> 
     return "".join(parts)
 
 
+def _render_slider(reveal: dict, dist: dict[str, int]) -> str:
+    """Horizontal bars over the B bins (slider spec §4.6): value-range labels with
+    showValue, otherwise the end labels on the first and last bin only. The target's
+    bin is highlighted, and the shared target line goes underneath."""
+    geometry = slider_geometry(reveal)
+    if geometry is None:
+        return '<p class="wc-empty">Slider settings unavailable</p>'
+    lo, _hi, step, n_steps, d = geometry
+    bins = slider_bins(n_steps)
+    kt = slider_index(reveal, reveal.get("target"))
+    target_bin = (kt * bins) // (n_steps + 1) if kt is not None else None
+    unit = reveal.get("unit")
+    show_value = reveal.get("showValue", True) is not False
+
+    def value_text(k: int) -> str:
+        return format_number(lo + k * step, d)
+
+    counts = [dist.get(str(b), 0) for b in range(bins)]
+    max_count = max(counts, default=0) or 1
+    rows = []
+    for b, count in enumerate(counts):
+        first = -(-b * (n_steps + 1) // bins)  # ceil
+        last = -(-(b + 1) * (n_steps + 1) // bins) - 1
+        if show_value:
+            label = value_text(first)
+            if last != first:
+                label += f"–{value_text(last)}"
+            if isinstance(unit, str) and unit:
+                label += f" {unit}"
+        elif b == 0:
+            label = reveal.get("minLabel") or ""
+        elif b == bins - 1:
+            label = reveal.get("maxLabel") or ""
+        else:
+            label = ""
+        is_target = b == target_bin
+        pct = int(count / max_count * 100)
+        width = max(pct, 3 if count > 0 else 0)
+        fill = "#166534" if is_target else "#3730a3"
+        count_inner = f'<span class="bar-count">{count}</span>' if count > 0 else ""
+        mark = (
+            '<span class="bar-correct-mark">◆ Target</span>'
+            if is_target
+            else ('<span class="bar-correct-mark"></span>')
+        )
+        # No fill at all for an empty bin: .bar-fill's padding would draw a stub.
+        fill_div = (
+            f'<div class="bar-fill" style="width:{width}%;background:{fill}">{count_inner}</div>'
+            if count > 0
+            else ""
+        )
+        rows.append(
+            f'<div class="bar-row slider-row">'
+            f'<span class="bar-label">{_esc(label)}</span>'
+            f'<div class="bar-track">'
+            f"{fill_div}"
+            f"</div>"
+            f"{mark}"
+            f"</div>"
+        )
+    return (
+        '<div class="bar-chart slider-chart">'
+        + "".join(rows)
+        + "</div>"
+        + f'<p class="slider-target">{_esc(slider_target_line(reveal))}</p>'
+    )
+
+
 def _render_histogram(buckets: list[dict]) -> str:
     max_count = max((b["count"] for b in buckets), default=0) or 1
     MAX_H = 160  # max bar height px
@@ -435,6 +519,10 @@ body{
 .badge-tf{background:#1a3a2a;color:#86efac}
 .badge-fitb{background:#3b2f1e;color:#fbbf24}
 .badge-map{background:#3b1e2a;color:#f9a8d4}
+.badge-slider{background:#1e3b3a;color:#5eead4}
+.slider-chart{gap:4px}
+.slider-row .bar-track{height:24px}
+.slider-target{margin-top:14px;font-size:0.95rem;font-weight:600;color:#cbd5e1}
 .map-svg{display:block;width:100%;height:auto;max-height:640px;border-radius:12px;background:#0f172a}
 .prompt-img{display:block;max-width:100%;height:auto;max-height:360px;margin:0 0 16px;border-radius:8px}
 .opt-img{vertical-align:middle;border-radius:4px}
@@ -570,7 +658,7 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
 
         dist: dict[str, int] = defaultdict(int)
         for s in q_scores:
-            key = _extract_answer_key(q.type, s.answer_data)
+            key = _extract_answer_key(q.type, q.config, s.answer_data)
             if key is not None:
                 dist[key] += 1
 
@@ -582,6 +670,7 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
             "true_false": ("True / False", "badge-tf"),
             "fill_in_the_blank": ("Fill in the Blank", "badge-fitb"),
             "map_pin": ("Map Pin", "badge-map"),
+            "slider": ("Slider", "badge-slider"),
         }.get(q.type, (q.type, ""))
         type_label, type_class = type_badge
 
@@ -599,12 +688,15 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
             chart = _render_map_pin(
                 reveal, dict(dist), images.get((q.config or {}).get("imageId"))
             )
+        elif q.type == "slider":
+            chart = _render_slider(reveal, dict(dist))
         else:
             chart = ""
 
-        if q.type == "map_pin":
+        if q.type in ("map_pin", "slider"):
             # Geometry-based, so the same meaning under both grading types (§4.6).
-            mp = map_pin_stats(
+            stats_fn = map_pin_stats if q.type == "map_pin" else slider_stats
+            mp = stats_fn(
                 q.config or {}, q.answer_data or {}, [s.answer_data for s in q_scores]
             )
             within = "—" if mp["withinFullPct"] is None else f"{mp['withinFullPct']:g}%"
