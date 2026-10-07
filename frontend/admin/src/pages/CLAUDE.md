@@ -15,7 +15,10 @@ Images, Sessions, Guests), plus Logout. Unknown paths → `/users`.
   SSO and no role check. Renders the theme toggle fixed top-right.
 - `CoursesPage.tsx` — `/courses`: list, create, and rename courses (name + semester). It also
   sets `allow_guests`: a checkbox on create, and a per-course "Guests allowed" toggle
-  (`PUT {allow_guests}`). Each row links to its roster. No delete (there's no endpoint).
+  (`PUT {allow_guests}`). Each row links to its roster. Delete (browser confirm) calls
+  `DELETE /admin/courses/{id}`; it works only on an empty course, and a 409
+  `COURSE_NOT_EMPTY` shows the server's counts in the page's error line. The roster and
+  host/player access go with the course.
 - `AccessPage.tsx` — `/access` (T4): pick a course (`GET /admin/courses`), then three panels:
   - **Course hosts and players** (`GET /admin/courses/{id}/access`). Grant: a user from
     `GET /admin/users` + role → `POST /admin/users/{uid}/course-access`. That call upserts, so

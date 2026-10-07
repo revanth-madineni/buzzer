@@ -80,7 +80,9 @@ per-user `UserGameAccess` grants alone, and ignores `course_id`, `restricted` an
   integrity error (or try to null a non-nullable FK) unless the caller cleans up first.
   Deleting a `GameSession` *does* cascade to its scores.
   `Game.course_id` also has no `ondelete` and `Course.games` no cascade, so a course with games
-  cannot be deleted either (there is no course-delete endpoint).
+  cannot be deleted either. `DELETE /admin/courses/{id}` therefore refuses (409
+  `COURSE_NOT_EMPTY`) unless the course has no games, sessions or images, and deletes with a
+  Core statement so the ORM never nulls `Game.course_id` (`routers/CLAUDE.md`).
 - **Don't assume a game has a course.** `Game.course_id` is nullable, and don't treat
   `Game.course_id` and `GameSession.course_id` as interchangeable (see above).
 - Migration 004's DDL is not transactional on MySQL. If it fails partway, see the recovery

@@ -223,7 +223,12 @@ def game_setup(docker_stack, base_url: str, admin_token: str, fast_mode: bool):
         headers=headers,
         timeout=10.0,
     )
-    # Courses have no cascade and no DELETE endpoint; leave them as inert records.
+    # The course goes last, after its game; a 409 (something left in it) is ignored.
+    httpx.delete(
+        f"{base_url}/api/admin/courses/{course_id}",
+        headers=headers,
+        timeout=10.0,
+    )
 
 
 def create_questions(

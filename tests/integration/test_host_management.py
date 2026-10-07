@@ -193,6 +193,7 @@ def test_admin_course_allow_guests(t4: T4World):
         json={"name": f"T4 Course {t4.tag}ng", "semester": "T4", "allow_guests": False},
     )
     assert r.status_code == 201, r.text
+    t4.track_course(r.json()["id"])
     assert r.json()["allow_guests"] is False
 
 

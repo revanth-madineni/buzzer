@@ -8,8 +8,10 @@ Every name is unique per test (`tag = uuid4().hex[:8]`), as in conftest's
   2. DELETE /admin/games/{id} for every game created;
   3. DELETE /admin/images/{id} for every image uploaded through `upload` (or
      `track_image`), after the games, so they are unused by then (T8);
-  4. DELETE /admin/users/{id} for every user created (their access rows cascade).
-Courses and roster rows are left as inert records (no course-delete endpoint).
+  4. DELETE /admin/users/{id} for every user created (their access rows cascade);
+  5. DELETE /admin/courses/{id} for every course created (or `track_course`), last,
+     so they are empty by then (their roster and access rows cascade). A 409 from
+     something the teardown doesn't track leaves the course behind.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ class T4World:
     _users: list[str] = field(default_factory=list)
     _sessions: list[str] = field(default_factory=list)
     _images: list[str] = field(default_factory=list)
+    _courses: list[int] = field(default_factory=list)
 
     # --- raw HTTP --------------------------------------------------------
 
@@ -78,7 +81,12 @@ class T4World:
             json={"name": f"T4 Course {self.tag}{self._n}", "semester": "T4"},
         )
         assert r.status_code == 201, r.text
-        return r.json()["id"]
+        course_id = r.json()["id"]
+        self.track_course(course_id)
+        return course_id
+
+    def track_course(self, course_id: int) -> None:
+        self._courses.append(course_id)
 
     def game(self, course_id: int | None = None, restricted: bool = False) -> int:
         """An admin-created game in `course_id` (courseless if None)."""
@@ -202,6 +210,8 @@ class T4World:
             self.request("DELETE", f"/admin/images/{image_id}")
         for user_id in self._users:
             self.request("DELETE", f"/admin/users/{user_id}")
+        for course_id in self._courses:
+            self.request("DELETE", f"/admin/courses/{course_id}")
 
 
 @pytest.fixture()

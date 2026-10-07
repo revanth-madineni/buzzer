@@ -1,6 +1,6 @@
 # Course delete (admin)
 
-Status: **spec, not built**. Branch `feat/course-delete`.
+Status: **built**. Branch `feat/course-delete`.
 
 ## 1. Problem
 

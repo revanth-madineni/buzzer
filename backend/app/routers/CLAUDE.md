@@ -11,7 +11,7 @@ into `services/`. Live gameplay is **not** here — it runs over Socket.IO in `w
 - `auth.py` — `/api/auth/*`: login, OAuth2 callback, temp-token exchange, guest join, refresh,
   logout. Sets the `refresh_token` cookie (httponly, `samesite=lax`, `path=/api/auth`, secure
   outside development).
-- `admin.py` — `/api/admin/*`: 38 endpoints for courses, rosters, games, questions, game
+- `admin.py` — `/api/admin/*`: 39 endpoints for courses, rosters, games, questions, game
   import/export, image upload, local users, access grants, guest merge, and session
   export/report.
   **Every one** depends on `require_admin`. T4 added:
@@ -27,6 +27,12 @@ into `services/`. Live gameplay is **not** here — it runs over Socket.IO in `w
   (alt text), `DELETE /admin/images/{id}` (409 `IMAGE_IN_USE`) and
   `POST /admin/images/{id}/replace` (201 with the **new** image; 30/min), and image counts
   on the move result.
+  `DELETE /admin/courses/{id}` (204) deletes an **empty** course only: 409
+  `COURSE_NOT_EMPTY` (counts in the message and in `games`/`sessions`/`images`) while any
+  game, session (`GameSession.course_id`, the course it was played in) or image points at
+  it. Roster and access rows cascade at the DB. It is a Core `DELETE`, not
+  `db.delete(course)`, so a racing game insert hits the FK instead of being unassigned by
+  the ORM (`docs/plans/course-delete.md`).
 - `host.py` — `/api/host/*` (T4): course-host management. Every endpoint uses a
   `require_*_host` dependency (see the table below), and URLs are flat (`/host/games/{id}`,
   not nested under a course).
@@ -157,7 +163,7 @@ Three kinds of host checks exist:
   (to satisfy the NOT NULL FK) and does not clear Redis for a live room.
 - `DELETE /admin/users/{id}` deletes the user's scores. It refuses ADMIN targets, but
   `PUT /admin/users/{id}` can demote any admin, including the last one or yourself.
-- There is no endpoint to delete a course, a roster entry (only deactivate via PATCH), or a
+- There is no endpoint to delete a roster entry (only deactivate via PATCH) or a
   question's scores. Deleting a question that has scores returns 409 `QUESTION_HAS_ANSWERS`
   (admin and host, via `question_service`).
 - Patching a roster entry's `netid` to one that already exists in the course violates the
