@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { MapPinHeatmap } from '../../components/MapPinHeatmap';
+import { SliderHistogram } from '../../components/SliderHistogram';
 import { AuthImage } from '../../components/AuthImage';
 import type { AnswerReveal, QuestionConfig } from '../../types/game';
 
@@ -264,8 +265,11 @@ export default function ResultsPage() {
   const mapReveal =
     questionResults?.answerReveal.type === 'map_pin' ? questionResults.answerReveal : null;
 
+  const sliderReveal =
+    questionResults?.answerReveal.type === 'slider' ? questionResults.answerReveal : null;
+
   const bars =
-    !isFitb && !mapReveal && questionResults
+    !isFitb && !mapReveal && !sliderReveal && questionResults
       ? buildBars(
           questionResults.answerReveal,
           questionResults.answerDistribution,
@@ -290,6 +294,18 @@ export default function ResultsPage() {
         <div className="w-full max-w-4xl flex flex-col gap-2">
           <MapPinHeatmap reveal={mapReveal} distribution={questionResults.answerDistribution} />
           {mapReveal.gradingType === 'COMPLETENESS' && (
+            <p className="text-center text-warning-fg text-lg">
+              Participation — full credit for answering
+            </p>
+          )}
+          <p className="text-fg text-lg text-right">
+            {questionResults.totalAnswered} / {questionResults.totalPlayers} answered
+          </p>
+        </div>
+      ) : questionResults && sliderReveal ? (
+        <div className="w-full max-w-4xl flex flex-col gap-2">
+          <SliderHistogram reveal={sliderReveal} distribution={questionResults.answerDistribution} />
+          {sliderReveal.gradingType === 'COMPLETENESS' && (
             <p className="text-center text-warning-fg text-lg">
               Participation — full credit for answering
             </p>

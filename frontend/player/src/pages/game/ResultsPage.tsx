@@ -1,7 +1,9 @@
-import { pinStorageKey, useGame } from './GameLayout';
+import { pinStorageKey, sliderStorageKey, useGame } from './GameLayout';
 import { MapPinCanvas } from '../../components/MapPinCanvas';
+import { SliderInput } from '../../components/SliderInput';
 import { mapPinDistance, type Point } from '../../lib/mapPin';
-import type { MapPinReveal, PlayerResultsPayload } from '../../types/game';
+import { inRange, sliderDistance, sliderGeometry, snapIndex } from '../../lib/slider';
+import type { MapPinReveal, PlayerResultsPayload, SliderReveal } from '../../types/game';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { AuthImage } from '../../components/AuthImage';
 
@@ -73,6 +75,73 @@ function MapPinResults({
   );
 }
 
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function storedSliderValue(code: string, questionId: number): number | null {
+  try {
+    const raw = sessionStorage.getItem(sliderStorageKey(code, questionId));
+    return raw ? asNumber(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Label from geometry, like map_pin's (slider spec §4.9). */
+function sliderLabel(reveal: SliderReveal, myIndex: number | null): { text: string; className: string } {
+  const geom = sliderGeometry(reveal);
+  if (myIndex === null || !geom || reveal.target === null || !inRange(geom, reveal.target)) {
+    return { text: 'No answer', className: 'text-fg-muted' };
+  }
+  const d = sliderDistance(geom, myIndex, snapIndex(geom, reveal.target));
+  if (reveal.fullRadius !== null && d <= reveal.fullRadius) {
+    return { text: 'Spot on', className: 'text-success-fg' };
+  }
+  if (reveal.zeroRadius !== null && d < reveal.zeroRadius) {
+    return { text: 'Close — partial credit', className: 'text-warning-fg' };
+  }
+  return { text: 'Way off', className: 'text-danger-fg' };
+}
+
+function SliderResults({
+  results,
+  reveal,
+  value,
+}: {
+  results: PlayerResultsPayload;
+  reveal: SliderReveal;
+  value: number | null;
+}) {
+  const geom = sliderGeometry(reveal);
+  const myIndex = geom && value !== null && inRange(geom, value) ? snapIndex(geom, value) : null;
+  const label = sliderLabel(reveal, myIndex);
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 gap-5 text-center pt-16">
+      <ThemeToggle className="fixed top-3 right-3 z-40" />
+      <p className={`text-3xl font-black ${label.className}`}>
+        {label.text}
+        {reveal.gradingType === 'COMPLETENESS' && (
+          <span className="block text-base font-semibold text-accent-fg mt-1">
+            · full credit for answering
+          </span>
+        )}
+      </p>
+      <SliderInput config={reveal} reveal={reveal} myIndex={myIndex} />
+      <p className="text-fg text-3xl font-bold">+{results.yourPoints.toLocaleString()} pts</p>
+      <div className="space-y-1">
+        <p className="text-fg text-lg">
+          Total: <span className="font-bold text-fg">{results.yourScore.toLocaleString()}</span> pts
+        </p>
+        <p className="text-fg-muted text-base">
+          Rank <span className="font-bold text-fg">#{results.yourRank}</span> of {results.playerCount}
+        </p>
+      </div>
+      <p className="text-fg-muted text-sm mt-2">Waiting for next question…</p>
+    </div>
+  );
+}
+
 function describeAnswer(
   lastAnswerData: Record<string, unknown> | null,
   type: string,
@@ -113,6 +182,13 @@ export default function ResultsPage() {
     const local = currentQuestion?.questionId === questionResults.questionId ? asPin(lastAnswerData) : null;
     const pin = answerRejected ? null : local ?? storedPin(roomCode, questionResults.questionId);
     return <MapPinResults results={questionResults} reveal={answerReveal} pin={pin} />;
+  }
+  if (answerReveal.type === 'slider') {
+    // Own value: this page's state, else the copy saved when the server accepted it.
+    const local =
+      currentQuestion?.questionId === questionResults.questionId ? asNumber(lastAnswerData?.value) : null;
+    const value = answerRejected ? null : local ?? storedSliderValue(roomCode, questionResults.questionId);
+    return <SliderResults results={questionResults} reveal={answerReveal} value={value} />;
   }
   const answeredLabel = describeAnswer(
     lastAnswerData,

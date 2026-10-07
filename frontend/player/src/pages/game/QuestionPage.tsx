@@ -2,8 +2,10 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import { useGame } from './GameLayout';
 import { TimerBar } from '../../components/ui/TimerBar';
 import { MapPinCanvas } from '../../components/MapPinCanvas';
+import { SliderInput } from '../../components/SliderInput';
 import { AuthImage } from '../../components/AuthImage';
 import { clampPoint, type Point } from '../../lib/mapPin';
+import { indexValue, middleIndex, sliderGeometry } from '../../lib/slider';
 import type { QuestionPayload } from '../../types/game';
 
 const OPTION_COLORS = [
@@ -117,6 +119,69 @@ function MapPinQuestion({
         </button>
       )}
       {submitted && <p className="text-center text-fg-muted text-sm mt-2">Pin submitted — waiting for results…</p>}
+      {!submitted && answerRejected && rejectedMsg}
+      {!submitted && !answerRejected && questionLocked && (
+        <p className="text-center text-warning-fg text-sm mt-2 font-semibold">
+          Answers locked — waiting for results…
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * slider: the knob starts at the middle step; − / + move one step; Confirm submits the
+ * canonical value of the chosen step (slider spec §4.9). No "moved" requirement and no
+ * auto-submit at time-up. Keyed by questionId so each question starts in the middle.
+ */
+function SliderQuestion({
+  question,
+  startTime,
+  header,
+}: {
+  question: QuestionPayload;
+  startTime: number;
+  header: React.ReactNode;
+}) {
+  const { questionLocked, answerRejected, emitAnswer } = useGame();
+  const geom = sliderGeometry(question.config);
+  const [index, setIndex] = useState(() => (geom ? middleIndex(geom) : 0));
+  const [submitted, setSubmitted] = useState(false);
+
+  // `submitted` is set before the server acknowledges; a timing rejection undoes it.
+  useEffect(() => {
+    if (answerRejected) setSubmitted(false);
+  }, [answerRejected]);
+
+  if (!geom) {
+    return (
+      <div className="py-6 px-4 flex flex-col gap-3">
+        <div className="pb-2">{header}</div>
+        <p className="text-fg-muted text-center p-6">This question can't be answered.</p>
+      </div>
+    );
+  }
+
+  const inactive = submitted || questionLocked || answerRejected;
+
+  return (
+    <div className="py-6 px-4 flex flex-col gap-5">
+      <div className="pb-2">{header}</div>
+      <p className="text-center text-fg-muted text-sm">Slide to your guess, then confirm</p>
+      <SliderInput config={question.config} index={index} onIndexChange={setIndex} disabled={inactive} />
+      {!inactive && (
+        <button
+          onClick={() => {
+            if (inactive) return;
+            setSubmitted(true);
+            emitAnswer(question.questionId, { value: indexValue(geom, index) }, Date.now() - startTime);
+          }}
+          className="w-full rounded-2xl py-5 text-on-accent font-black text-2xl bg-accent enabled:hover:bg-accent-hover active:scale-95 transition-all mt-2"
+        >
+          Confirm
+        </button>
+      )}
+      {submitted && <p className="text-center text-fg-muted text-sm mt-2">Answer submitted — waiting for results…</p>}
       {!submitted && answerRejected && rejectedMsg}
       {!submitted && !answerRejected && questionLocked && (
         <p className="text-center text-warning-fg text-sm mt-2 font-semibold">
@@ -387,6 +452,22 @@ export default function QuestionPage() {
   if (currentQuestion.type === 'map_pin') {
     return (
       <MapPinQuestion
+        key={currentQuestion.questionId}
+        question={currentQuestion}
+        startTime={startTimeRef.current}
+        header={
+          <>
+            {questionLabel}
+            <TimerBar key={currentQuestion.questionId} totalSeconds={currentQuestion.timeLimitSeconds} paused={questionLocked} />
+          </>
+        }
+      />
+    );
+  }
+
+  if (currentQuestion.type === 'slider') {
+    return (
+      <SliderQuestion
         key={currentQuestion.questionId}
         question={currentQuestion}
         startTime={startTimeRef.current}

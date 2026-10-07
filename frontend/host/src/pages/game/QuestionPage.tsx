@@ -3,6 +3,7 @@ import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { TimerBar } from '../../components/ui/TimerBar';
 import { AuthImage } from '../../components/AuthImage';
+import { SliderScale } from '../../components/SliderHistogram';
 
 export default function QuestionPage() {
   const { currentQuestion, answeredCount, playerCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, autoAdvance, emitAdvance, emitLockQuestion } = useGame();
@@ -27,6 +28,7 @@ export default function QuestionPage() {
     fill_in_the_blank: 'Fill in the Blank',
     multi_select: 'Multi-Select',
     map_pin: 'Map Pin',
+    slider: 'Slider',
   };
 
   function editDistanceLabel(d: number): string {
@@ -80,6 +82,9 @@ export default function QuestionPage() {
           {currentQuestion.prompt}
         </h2>
       )}
+
+      {/* slider: the scale under the prompt (no knob; the knobs are on the phones). */}
+      {!questionLocked && currentQuestion.type === 'slider' && <SliderScale config={currentQuestion.config} />}
 
       {/* T8: the prompt image is projector-only; hidden while locked, like the prompt. */}
       {!questionLocked && promptImageId && (

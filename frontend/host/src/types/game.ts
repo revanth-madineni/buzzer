@@ -13,6 +13,8 @@ export interface SyncStatePayload {
   timerRemainingSeconds?: number | null;
 }
 
+import type { SliderRevealData, SliderSettings } from '../lib/slider';
+
 /** Sent to the room at game start, before the first new_question (T7). */
 export interface GameImagesPayload {
   imageIds: string[];
@@ -23,7 +25,8 @@ export type QuestionType =
   | 'true_false'
   | 'fill_in_the_blank'
   | 'multi_select'
-  | 'map_pin';
+  | 'map_pin'
+  | 'slider';
 
 /** map_pin config: public by design (the target lives in answer_data, never sent). */
 export interface MapPinConfig {
@@ -32,7 +35,10 @@ export interface MapPinConfig {
   imageHeight: number;
 }
 
-export interface QuestionConfig extends Partial<MapPinConfig> {
+/** slider config (T7 slider spec §4.1): public; the target lives in answer_data. */
+export type SliderConfig = SliderSettings;
+
+export interface QuestionConfig extends Partial<MapPinConfig>, SliderConfig {
   options?: string[];
   maxLength?: number;
   /** T8: one image shown with the prompt (projector only); any question type. */
@@ -54,6 +60,12 @@ export interface MapPinReveal {
   target: { x: number; y: number };
   fullRadius: number;
   zeroRadius: number;
+}
+
+/** Same reveal for both grading types (slider spec §4.3). Radii are fractions of the range. */
+export interface SliderReveal extends SliderRevealData {
+  type: 'slider';
+  gradingType: 'ACCURACY' | 'COMPLETENESS';
 }
 
 export interface PlayerJoinedPayload {
@@ -111,6 +123,7 @@ export type AnswerReveal =
   | { type: 'completeness' }
   | { type: 'multi_select'; answerPoints: number[] }
   | MapPinReveal
+  | SliderReveal
   | Record<string, never>;
 
 export interface HostResultsPayload {
@@ -135,7 +148,7 @@ export interface HostQuestionSummaryItem {
   totalPlayers: number;
   correctCount: number;
   avgAnswerTimeMs: number | null;
-  /** map_pin only, from geometry (both grading types); null when nobody answered. */
+  /** map_pin and slider only, from geometry (both grading types); null when nobody answered. */
   withinFullPct?: number | null;
   averageCredit?: number | null;
   imageAlt?: ImageAltMap;

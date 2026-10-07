@@ -69,3 +69,53 @@
     outline-offset: -2px;
   }
 }
+
+@layer components {
+  /* The slider question's native range input (T7 slider spec §4.9): a 44px thumb for touch,
+     drawn only from tokens. Pseudo-elements can't take Tailwind classes, hence this rule. */
+  .slider-range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 44px;
+    background: transparent;
+    touch-action: pan-y;
+  }
+
+  .slider-range::-webkit-slider-runnable-track {
+    height: 12px;
+    border-radius: 9999px;
+    background: rgb(var(--chart-track));
+  }
+
+  .slider-range::-moz-range-track {
+    height: 12px;
+    border-radius: 9999px;
+    background: rgb(var(--chart-track));
+  }
+
+  .slider-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    margin-top: -16px; /* (12px track − 44px thumb) / 2 */
+    border-radius: 9999px;
+    background: rgb(var(--accent));
+    border: 4px solid rgb(var(--on-accent));
+  }
+
+  .slider-range::-moz-range-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 9999px;
+    background: rgb(var(--accent));
+    border: 4px solid rgb(var(--on-accent));
+  }
+
+  .slider-range:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}

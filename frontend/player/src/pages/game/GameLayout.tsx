@@ -31,6 +31,11 @@ export function pinStorageKey(code: string, questionId: number): string {
   return `buzzer:pin:${code}:${questionId}`;
 }
 
+/** sessionStorage key for a player's accepted slider value (JSON number), likewise. */
+export function sliderStorageKey(code: string, questionId: number): string {
+  return `buzzer:slider:${code}:${questionId}`;
+}
+
 interface GameContextValue {
   phase: PlayerPhase;
   gameStatus: 'LOBBY' | 'IN_PROGRESS';
@@ -166,6 +171,17 @@ export default function GameLayout() {
         // Accepted by the server: keep the pin so results can show it after a reload.
         try {
           sessionStorage.setItem(pinStorageKey(code, data.questionId), JSON.stringify(pending.answer));
+        } catch {
+          // Storage blocked or full: results just won't survive a reload.
+        }
+      }
+      if (pending?.question.type === 'slider' && pending.question.questionId === data.questionId) {
+        // Likewise for a slider: the value the client sent (slider spec §4.9).
+        try {
+          sessionStorage.setItem(
+            sliderStorageKey(code, data.questionId),
+            JSON.stringify(pending.answer.value),
+          );
         } catch {
           // Storage blocked or full: results just won't survive a reload.
         }
