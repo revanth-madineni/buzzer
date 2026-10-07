@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Users, Pencil } from 'lucide-react';
+import { Plus, Users, Pencil, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
@@ -66,6 +66,17 @@ export default function CoursesPage() {
       setCourses((prev) => prev.map((x) => (x.id === c.id ? updated : x)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update course');
+    }
+  }
+
+  async function deleteCourse(c: Course) {
+    if (!confirm(`Delete "${c.name} — ${c.semester}"? Its roster and host/player access are deleted too. This cannot be undone.`)) return;
+    setError('');
+    try {
+      await api.delete(`/admin/courses/${c.id}`);
+      setCourses((prev) => prev.filter((x) => x.id !== c.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete course');
     }
   }
 
@@ -199,6 +210,14 @@ export default function CoursesPage() {
                   onClick={() => navigate(`/courses/${c.id}/roster`)}
                 >
                   <Users size={14} className="mr-1" /> Roster
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => void deleteCourse(c)}
+                  title="Delete course"
+                >
+                  <Trash2 size={14} />
                 </Button>
               </div>
             </Card>

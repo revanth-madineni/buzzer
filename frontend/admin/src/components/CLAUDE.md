@@ -66,8 +66,8 @@ and upload calls from the caller. The admin app has no `TimerBar` because it nev
     `overflow-hidden`, which clipped the segments' focus outlines. Game grants are a plain
     checkbox list with no role.
   - `<textarea>` in `GamesPage` and `QuestionEditorPage`.
-  - Destructive actions use the browser's `window.confirm()` (`GamesPage`, `GuestsPage`,
-    `UserDetailPage`, `QuestionEditorPage`, `ImagesPage`). Styles for those controls are repeated per page:
+  - Destructive actions use the browser's `window.confirm()` (`CoursesPage`, `GamesPage`,
+    `GuestsPage`, `UserDetailPage`, `QuestionEditorPage`, `ImagesPage`). Styles for those controls are repeated per page:
     native controls are `surface-alt` with a `line-strong` border and `fg` text inside a card,
     and `surface` when they sit directly on the page.
 - **A `className` hover override on a `Button` must use `enabled:hover:`**, because the

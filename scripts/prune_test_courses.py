@@ -3,8 +3,10 @@
 Delete leftover integration-test courses from the local dev database.
 
 The integration tests create a course per run ("Test Course <tag>", "T4 Course <tag>",
-"Slider E2E <tag>", ...) and there is no course-delete endpoint, so course pickers fill up
-with hundreds of them. This removes a course only when BOTH hold:
+"Slider E2E <tag>", ...). Since DELETE /admin/courses/{id} exists they delete their own
+courses in teardown, so this script is for leftovers: courses from before that change, from
+runs that died before teardown, or ones the teardown couldn't empty (its 409 is ignored).
+This removes a course only when BOTH hold:
 
   - its name matches one of the test-name patterns below, and
   - it has no games and no game sessions (so nothing real can be lost).

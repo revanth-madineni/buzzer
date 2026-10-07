@@ -21,6 +21,7 @@ from fastapi import (
 from fastapi.responses import Response, StreamingResponse
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..common.dependencies import require_admin
@@ -146,6 +147,56 @@ async def update_course(
         course.allow_guests = body.allow_guests
     await db.commit()
     return course
+
+
+@router.delete("/courses/{course_id}", status_code=204)
+async def delete_course(
+    course_id: int,
+    _: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Delete an empty course. Roster rows and access grants go with it (DB cascade).
+
+    Refuses with 409 COURSE_NOT_EMPTY while any game, session (by the course it was
+    played in) or image points at the course. Spec: docs/plans/course-delete.md.
+    """
+    course = await db.get(Course, course_id)
+    if not course:
+        raise NotFoundError(f"Course {course_id} not found")
+    name = course.name
+
+    async def count(model) -> int:
+        return await db.scalar(
+            select(func.count()).select_from(model).where(model.course_id == course_id)
+        )
+
+    games = await count(Game)
+    sessions = await count(GameSession)
+    images = await count(Image)
+    if games or sessions or images:
+        raise BuzzerError(
+            "COURSE_NOT_EMPTY",
+            f"Can't delete this course: it still has {games} game(s), "
+            f"{sessions} session(s) and {images} image(s). Delete or move them first.",
+            409,
+            extra={"games": games, "sessions": sessions, "images": images},
+        )
+
+    # A Core DELETE, not db.delete(course): the ORM would null Game.course_id on a
+    # game added since the counts (Course.games has no cascade) instead of letting
+    # the FK refuse. Roster and access rows cascade at the DB; images SET NULL.
+    try:
+        await db.execute(delete(Course).where(Course.id == course_id))
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise BuzzerError(
+            "COURSE_NOT_EMPTY",
+            "Can't delete this course: something was added to it while deleting. "
+            "Reload and try again.",
+            409,
+        )
+    logger.info("course_deleted", course_id=course_id, name=name)
 
 
 # ---------------------------------------------------------------------------

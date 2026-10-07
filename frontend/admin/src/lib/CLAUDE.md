@@ -40,7 +40,7 @@ dependencies):
 **Admin-only (`require_admin`, everything under `/api/admin/`):**
 | caller | calls |
 |---|---|
-| `CoursesPage` | `GET/POST /admin/courses`, `PUT /admin/courses/{id}` (incl. `allow_guests`) |
+| `CoursesPage` | `GET/POST /admin/courses`, `PUT /admin/courses/{id}` (incl. `allow_guests`), `DELETE /admin/courses/{id}` |
 | `AccessPage` | `GET /admin/courses`, `GET /admin/users`, `GET /admin/courses/{id}/access`, `POST/DELETE /admin/users/{uid}/course-access[/{cid}]`, `GET /admin/games`, `PUT /admin/games/{id}` (`restricted`), `GET /admin/games/{id}/access`, `POST/DELETE /admin/users/{uid}/game-access[/{gid}]`, plus `MoveGamePanel` |
 | `components/MoveGamePanel` | `POST /admin/games/{id}/move` (`confirm=false`, then `true`; the preview also returns T8's `images_moved` / `images_copied`) |
 | `RosterPage` | `GET /admin/courses/{id}/roster`, `POST .../roster/import` (JSON `{rows}`, parsed client-side), `PATCH .../roster/{entryId}` |
