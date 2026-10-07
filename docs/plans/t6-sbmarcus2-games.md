@@ -1,6 +1,6 @@
 # T6 — Sebastian's sample games (sbmarcus2)
 
-Status: **spec, not built**. Branch `feat/t6-sbmarcus2-sample-games` (off the slider branch, so
+Status: **built** (both bundles imported; §6 filled in). Play check (§4.5 step 6) still to do by hand. Branch `feat/t6-sbmarcus2-sample-games` (off the slider branch, so
 the `slider` type exists when the files are imported).
 
 ## 1. Problem
@@ -94,7 +94,10 @@ embedded image):
   | `scatter-negative` | Scatter plot of 50 points; x axis Hours of screen time, y axis Hours of sleep. |
   | `scatter-outlier` | Scatter plot of 40 points; x axis Hours studied, y axis Exam score. |
   | `histogram-wait` | Histogram of 50 customers; x axis Minutes waited in 5-minute bins from 0 to 40, y axis Number of customers. |
-  | `us-map` | Outline map of the contiguous United States showing state borders, with no labels. |
+  | `us-map` | Outline map of the United States, with Alaska and Hawaii as insets, showing state borders, with no labels. |
+
+  (The `us-map` text was corrected at build time: the image turned out to include Alaska and
+  Hawaii insets, so "contiguous" would have been wrong.)
 
 ### 4.2 Points and time limits
 
@@ -258,18 +261,24 @@ body and the map."*
 Octopus hearts, flamingo collective nouns, honey and banana-berries were considered and dropped
 because `surprising_facts.json` already uses them.
 
-## 6. Build record (filled in at build time)
+## 6. Build record (filled in at build time, 2026-10-06)
+
+Charts: 1200 × 800 PNG, matplotlib, axes box at figure fraction [0.10, 0.12, 0.85, 0.83].
+Targets read from `ax.transData` and divided by (1200, 800). Distances are in image widths
+(dy scaled by height/width), the same as the server's.
 
 | Item | Value |
 |---|---|
-| `scatter-warmup` | n, actual r (3 dp), x/y ranges |
-| `scatter-negative` | n, actual r (3 dp), x/y ranges |
-| `scatter-outlier` | n, r without / with outlier, outlier data coords, target (x, y), nearest other point's distance |
-| `histogram-wait` | counts, bar pitch, target (x, y), radii |
-| `us-map` Roswell | target (x, y) and how it was measured |
-| `us-map` Lebanon, KS | target (x, y) and how it was measured |
-| `us-map` source | `sample_games/assets/us-map.png` (provenance confirmed by Revanth) or the Census fallback (§7) |
-| Import check | course, result, question/image counts |
+| `scatter-warmup` | n = 50; r = **0.780**; x 0.15–9.99 h, y 53.85–90.10; axes x 0–10.5, y 35–105 |
+| `scatter-negative` | n = 50; r = **−0.450**; x 1.49–7.87 h, y 5.53–8.89 h; axes x 0–9, y 3.5–10.5 |
+| `scatter-outlier` | n = 40; r = 0.900 without the outlier, 0.745 with it; outlier at (5.0 h, 30); target **(0.5048, 0.7824)**; nearest other point 0.2406 widths away (> zeroRadius 0.07) |
+| `histogram-wait` | counts [14, 10, 8, 6, 5, 4, 2, 1]; bars touch; y axis 0–16; bar pitch 0.1062; target (top-centre of bar 3, data (12.5, 8)) **(0.3656, 0.4650)**; fullRadius 0.0478, zeroRadius 0.1062 |
+| `us-map` Roswell | **(0.3888, 0.6823)**, pixel (1392, 1557). §4.4 recipe with brightness threshold 170 for the white borders; on the row, New Mexico spans px 1095–1489 (109.05° W – 103.04° W); on the column, px 1270–1667 (37° N – 32° N); converged in 2 passes. 65.6 px/° lon vs 79.4 px/° lat, ratio 0.83 ≈ cos 33.4°. |
+| `us-map` Lebanon, KS | **(0.5042, 0.4676)**, pixel (1805, 1067). On the row, Kansas spans px 1588–2016 (102.05° W – ≈95.2° W, the Missouri River at that latitude); on the column, px 1054–1292 (40° N – 37° N); 2 passes. 62.5 px/° lon vs 79.3 px/° lat, ratio 0.79 ≈ cos 39.8°. |
+| `us-map` source | `sample_games/assets/us-map.png`, embedded byte-for-byte; provenance not yet confirmed by Revanth (§7 gate) |
+| Overlay check | all four `map_pin` overlays checked by eye: the outlier is the only point inside zeroRadius; the Roswell target is in south-east New Mexico; the Lebanon target is just south of the Kansas–Nebraska line; on the histogram, bar 2's top-centre is outside zeroRadius |
+| Import check | course 715 "Sample games" (created once through the admin API). Classroom → game 705: 10 questions, 4 images. Party → game 706: 11 questions, 1 image. Both have all six types and both grading types; the server filled map dims (1200 × 800, 3580 × 2282). |
+| File sizes | classroom 0.15 MB, party 1.20 MB |
 
 ## 7. Risks and open items
 
