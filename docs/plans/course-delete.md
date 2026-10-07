@@ -22,8 +22,10 @@ Courses page, and test teardown that uses it.
   no image has `course_id` = this course. Anything else → **409 `COURSE_NOT_EMPTY`**, with a
   message that names the counts and nothing deleted.
 - Roster rows (`course_rosters`) and course access grants (`user_course_access`) are **deleted
-  with the course**. Both already have `ON DELETE CASCADE` at the database, so the endpoint
-  does nothing extra for them. The UI confirm says so.
+  with the course**. Both already have `ON DELETE CASCADE` at the database (migration 001;
+  `models/course.py`), so the endpoint does nothing extra for them. The UI confirm says so.
+- The delete is a **Core `DELETE` statement**, not ORM `db.delete(course)`, so only the
+  database's foreign keys decide what happens (see §4.1).
 - **No host endpoint.** Only admins create courses (`POST /admin/courses`), so only admins
   delete them.
 - **No Redis work.** A course has no Redis state of its own. Live room state is keyed by
@@ -65,7 +67,8 @@ New handler `delete_course` in the Courses section, after `update_course`:
 ```
 DELETE /courses/{course_id}  status 204
 deps: require_admin, get_db
-1. course = db.get(Course, course_id); missing → NotFoundError("Course {id} not found")
+1. course = await db.get(Course, course_id); missing → NotFoundError("Course {id} not found")
+   name = course.name   (kept for the log line in step 5)
 2. three counts, each SELECT COUNT(*):
      games    = Game.course_id == course_id
      sessions = GameSession.course_id == course_id
@@ -78,17 +81,27 @@ deps: require_admin, get_db
        409,
        extra={"games": games, "sessions": sessions, "images": images},
      )
-4. db.delete(course); commit
-   - IntegrityError on commit (a game/session/image was added between the counts and the
-     delete) → rollback, then raise the same COURSE_NOT_EMPTY 409 with the message
-     "Can't delete this course: something was added to it while deleting. Reload and try
-     again." and no counts in `extra`.
-5. logger.info("course_deleted", course_id=course_id, name=course.name)
+4. await db.execute(delete(Course).where(Course.id == course_id)); await db.commit()
+   - IntegrityError on execute or commit (a game or session was added between the counts
+     and the delete) → await db.rollback(), then raise the same COURSE_NOT_EMPTY 409 with
+     the message "Can't delete this course: something was added to it while deleting.
+     Reload and try again." and no counts in `extra`.
+5. logger.info("course_deleted", course_id=course_id, name=name)
 ```
 
-- Model imports: `Course` (`models/course.py`), `Game` (`models/game.py`), `GameSession`
-  (`models/session.py`), `Image` (`models/image.py`); `IntegrityError` from
-  `sqlalchemy.exc`.
+- **Why Core, not `db.delete(course)`:** the ORM acts on `Course`'s relationships before
+  it deletes. `Course.games` has no cascade, so the ORM would set `course_id = NULL` on any
+  game added in the race window and the delete would succeed, quietly unassigning that game
+  instead of raising the `IntegrityError` this step relies on. A Core `DELETE FROM courses
+  WHERE id = ?` skips the ORM, so the database alone applies its FKs: games and sessions
+  block (no `ondelete`), roster and access rows cascade, images are set NULL. The ORM-only
+  `cascade="all, delete-orphan"` on `Course.roster` / `Course.user_access` is not needed;
+  the database cascades do the same job.
+- The `course` object loaded in step 1 still sits in the session after the delete. That is
+  harmless because the handler returns right away (`expire_on_commit=False`).
+- Imports: `Course` (`models/course.py`), `Game` (`models/game.py`), `GameSession`
+  (`models/session.py`), `Image` (`models/image.py`); `delete` from `sqlalchemy`;
+  `IntegrityError` from `sqlalchemy.exc`.
 - The message is the important part: the admin API client (`frontend/admin/src/lib`) only
   surfaces `message`, so the counts must be in the text. `extra` is for tests and future
   clients.
@@ -107,6 +120,7 @@ deps: require_admin, get_db
     try: api.delete(`/admin/courses/${c.id}`); remove c from the list state
     catch err: setError(err.message, else 'Failed to delete course')
   ```
+- The page already has `error` state and its error line (`text-danger-fg`); reuse them.
 - No other page changes. Other pages load courses fresh on mount, so a deleted course just
   stops appearing.
 - Theme: only existing tokens/primitives; run `python scripts/check_theme.py` before the MR.
@@ -127,8 +141,11 @@ deps: require_admin, get_db
   - update the module docstring's teardown list (add step 5) and remove "Courses and roster
     rows are left as inert records (no course-delete endpoint)". Roster rows go with the
     course now.
-- **`tests/integration/test_host_management.py`** (~line 193) creates a course directly
-  ("T4 Course <tag>ng", `allow_guests: False`); call `t4.track_course(...)` on its id.
+- **`tests/integration/test_host_management.py`** (~line 192) creates a course directly
+  ("T4 Course <tag>ng", `allow_guests: False`); call `t4.track_course(...)` on its id. This
+  is the only `POST /admin/courses` in `tests/` besides the two helpers above.
+- Out of scope: `scripts/seed_demo.py` (demo data, meant to stay) and
+  `scripts/smoke_test_websocket.py` also create courses; neither is changed here.
 - Known leftovers, accepted: a course still leaks if a test dies before teardown, or if a
   test left something the teardown doesn't track (for example image copies made by a game
   move into another course). The course delete then gets a 409, which teardown ignores.
@@ -166,7 +183,8 @@ Run the suite against the live stack (`pytest tests/integration`), and confirm w
 - `backend/app/models/CLAUDE.md` Gotchas: replace "(there is no course-delete endpoint)" with
   a pointer to the endpoint's refuse-if-not-empty rule.
 - `frontend/admin/src/pages/CLAUDE.md` (`CoursesPage`) and `frontend/admin/src/lib/CLAUDE.md`
-  (endpoint table row: add `DELETE /admin/courses/{id}`).
+  (endpoint table row: add `DELETE /admin/courses/{id}`); `frontend/admin/src/components/CLAUDE.md`
+  (add `CoursesPage` to the list of pages using `window.confirm()`).
 - `scripts/prune_test_courses.py` docstring: say the tests now delete their courses, and the
   script is for leftovers from before this change or from crashed runs.
 
@@ -175,7 +193,9 @@ Run the suite against the live stack (`pytest tests/integration`), and confirm w
 - **A played course can never be deleted.** By design (see §3). If admins later need to remove
   old semesters, that is a separate archive or export-then-delete feature.
 - **Race with concurrent creates.** Covered by the IntegrityError → 409 path for games and
-  sessions (their FKs have no `ondelete`, so MySQL blocks the delete). An **image** uploaded
+  sessions (their FKs have no `ondelete`, so MySQL blocks the delete). This only holds
+  because the delete is a Core statement (§4.1); an ORM delete would unassign a racing game
+  instead. Not covered by a test (the window can't be hit reliably). An **image** uploaded
   into the course in that window is not caught: its FK is `ON DELETE SET NULL`, so it
   silently becomes courseless (visible under the admin Images page's "unassigned" filter).
   Accepted as very unlikely for an admin-only action.
