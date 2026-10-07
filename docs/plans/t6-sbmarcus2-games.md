@@ -57,7 +57,8 @@ embedded image):
 - **Map_pin only in the classroom game, party version 1.** Lighter file, but fails the agreed
   "every game, every type" rule.
 - **A new map image for the party game.** No source or licence to check; reusing the team's
-  existing asset is simpler. (Its provenance is still an open item, §7.)
+  existing asset is simpler. (Its provenance is still an open item; §7 has the gate and a
+  public-domain fallback.)
 
 ## 4. Detailed implementation
 
@@ -66,9 +67,13 @@ embedded image):
 ```
 { "format": "buzzer/game", "version": 2,
   "game": { "title", "description", "max_players": 150 },
-  "images": [ { "id", "mime_type": "image/png", "alt_text", "data": <base64> } ],
-  "questions": [ ... ] }
+  "questions": [ ... ],
+  "images": [ { "id", "mime_type": "image/png", "alt_text", "data": <base64> } ] }
 ```
+
+- Top-level key order is exactly `format, version, game, questions, images` (the order of the
+  existing `madineni_us_geography_classroom.json` and of the server's export). Question keys:
+  `type, grading_type, prompt, config, answer_data, time_limit_seconds, points_value`.
 
 - Image IDs are readable strings (allowed for bundles): `scatter-warmup`, `scatter-negative`,
   `scatter-outlier`, `histogram-wait`, `us-map`. Import replaces them with UUIDs.
@@ -81,6 +86,15 @@ embedded image):
 - `COMPLETENESS` questions: `answer_data: {}`, except `map_pin`/`slider`, which still need their
   target and radii (both grading types show the same reveal).
 - Map radii are in **image-width units**; slider radii are **fractions of the range**.
+- **Alt text, verbatim** (neutral: no trend, no answer, no state names):
+
+  | Image id | `alt_text` |
+  |---|---|
+  | `scatter-warmup` | Scatter plot of 50 points; x axis Hours studied, y axis Exam score. |
+  | `scatter-negative` | Scatter plot of 50 points; x axis Hours of screen time, y axis Hours of sleep. |
+  | `scatter-outlier` | Scatter plot of 40 points; x axis Hours studied, y axis Exam score. |
+  | `histogram-wait` | Histogram of 50 customers; x axis Minutes waited in 5-minute bins from 0 to 40, y axis Number of customers. |
+  | `us-map` | Outline map of the contiguous United States showing state borders, with no labels. |
 
 ### 4.2 Points and time limits
 
@@ -107,9 +121,9 @@ N = 200 steps, so 0.025 of the range = ±0.05 in r and 0.05 = ±0.10 in r.
 |---|---|---|---|---|
 | 1 | slider | COMPLETENESS | "Warm-up (everyone scores): estimate the correlation coefficient r for this scatter plot." | image `scatter-warmup`; target **0.78**; fullRadius 0.025, zeroRadius 0.05 |
 | 2 | slider | ACCURACY | "Estimate the correlation coefficient r for this scatter plot." | image `scatter-negative`; target **−0.45**; fullRadius 0.025, zeroRadius 0.05 |
-| 3 | slider | ACCURACY | "In a normal distribution, about what percentage of values lie within one standard deviation of the mean?" | min 0, max 100, step 1, unit `%`; target **68**; fullRadius 0.02, zeroRadius 0.10 |
+| 3 | slider | ACCURACY | "In a normal distribution, about what percentage of values lie within one standard deviation of the mean?" | min 0, max 100, step 1, unit `%`; target **68**; fullRadius 0.02 (±2), zeroRadius 0.10 (±10) |
 | 4 | map_pin | ACCURACY | "One point doesn't follow the pattern. Tap the outlier." | image `scatter-outlier`; target = the outlier's centre; fullRadius 0.025, zeroRadius 0.07 |
-| 5 | map_pin | ACCURACY | "Tap the top of the bar that contains the median wait time." | image `histogram-wait`; target = top-centre of bar 3 (10–15 min); radii from the bar pitch (below) |
+| 5 | map_pin | ACCURACY | "Tap the top edge of the bar that contains the median wait time." | image `histogram-wait`; target = top-centre of bar 3 (10–15 min); radii from the bar pitch (below) |
 | 6 | multiple_choice | ACCURACY | "Which measure of center is least affected by extreme outliers?" | Mean / **Median** / Mode / Range → `[0,1,0,0]` |
 | 7 | true_false | ACCURACY | "A correlation of r = −0.9 describes a weaker linear relationship than r = 0.5." | **false** → `{"true":0,"false":1}` |
 | 8 | fill_in_the_blank | ACCURACY | "The middle value of an ordered data set is called the ___." | accepted `["median"]`, points `[1]`, editDistance 1 |
@@ -139,6 +153,11 @@ N = 200 steps, so 0.025 of the range = ±0.05 in r and 0.05 = ±0.10 in r.
   - fullRadius = 0.45 × bar pitch; zeroRadius = 1.0 × bar pitch, so a tap on a neighbouring
     bar's top-centre scores 0. Bar pitch is the distance between neighbouring bar centres, in
     image widths, measured on the rendered image.
+  - Bars touch (no gaps, width = pitch) with a dark outline; y axis fixed at 0–16 with
+    ticks every 2. A tap on the edge of bar 3's top (0.5 pitch out) still gets partial credit.
+  - **Accepted consequence:** a tap in the middle of bar 3, rather than on its top edge,
+    lands roughly 0.1+ widths below the target and scores little or nothing. The prompt says
+    "top edge" for that reason; the reveal shows the target, so the rule is learnable.
 - Map targets are the **rendered** pixel positions divided by width/height, read from the
   plotting library's transform. Never estimate them by eye.
 
@@ -172,14 +191,28 @@ body and the map."*
   - Q3: 150 is 62 off, beyond ±24.
   - Q4: 250 is 44 off, beyond ±35.
   - Q1 (1975, 8 off, beyond ±5) is COMPLETENESS anyway.
+- **Q5 names the state on purpose.** Party players get a foothold ("New Mexico"); the skill
+  tested is placing Roswell within it, and zeroRadius ≈ "the right state or a neighbour"
+  means knowing the state alone earns only partial credit.
 - **`us-map` targets.** The map has state outlines and no labels or graticule, so place targets
-  relative to state borders measured on the full-resolution image:
+  relative to state borders measured on the full-resolution image (3580 × 2282) with this
+  recipe, which tolerates a tilted-meridian projection:
+  1. Make a first-guess pixel from the rough numbers below.
+  2. **x:** on that pixel row, find the state's west and east border pixels; interpolate
+     linearly by longitude between the borders' longitudes
+     (New Mexico 109.05° W – 103.04° W; Kansas 102.05° W – 94.6° W at that latitude;
+     use the border actually crossed on the row).
+  3. **y:** on the resulting pixel column, find the state's north and south border pixels;
+     interpolate linearly by latitude (New Mexico 37° N – 32° N; Kansas 40° N – 37° N).
+  4. Repeat steps 2–3 once from the new pixel; stop when it moves less than 5 px.
+  5. Target = pixel ÷ (3580, 2282). Confirm with the overlay check (§4.5 step 4).
   - **Roswell:** about 1.5° west of New Mexico's east border (103° W) and about 1.4° north of
     its southern border along the Texas line (32° N). Roughly (0.39, 0.68).
   - **Lebanon, KS:** about 3.4° east of Kansas's west border (102° W), just south of the
     Kansas–Nebraska border (40° N). Roughly (0.50, 0.47).
   - The rough numbers come from a downscaled preview and are a sanity check only. The real
-    values come from the border measurement.
+    values come from the border measurement. A final target more than 0.03 from its rough
+    number means a border was misread; re-measure.
   - New Mexico is about 0.10 image widths wide, so fullRadius 0.03 is "the right corner of the
     right state" and zeroRadius 0.10 is "the right state or a neighbour".
 
@@ -193,9 +226,10 @@ body and the map."*
 4. **Overlay check (by eye):** for every `map_pin`, render the target with both radius circles
    on its image and look at it. For `scatter-outlier`, confirm only the outlier is inside
    zeroRadius.
-5. **Import check:** import both files through the admin API into a course on the running
-   stack (a real course, e.g. "Sample games", not a throwaway test course; see the
-   course-leak note in §7). Expect success, 10 and 11 questions, and 4 and 1 images.
+5. **Import check:** import both files through the admin API (`course_id` as a form field)
+   into a course named **"Sample games"** on the running stack. If it doesn't exist, create it
+   once through the admin API; never a throwaway test course (see the course-leak note in §7).
+   Expect success, 10 and 11 questions, and 4 and 1 images.
 6. **Play check:** host each game once with `scripts/simulate_players.py`, and click through
    every question's reveal on the host to confirm the images, sliders and target lines render
    in both themes.
@@ -234,13 +268,22 @@ because `surprising_facts.json` already uses them.
 | `histogram-wait` | counts, bar pitch, target (x, y), radii |
 | `us-map` Roswell | target (x, y) and how it was measured |
 | `us-map` Lebanon, KS | target (x, y) and how it was measured |
+| `us-map` source | `sample_games/assets/us-map.png` (provenance confirmed by Revanth) or the Census fallback (§7) |
 | Import check | course, result, question/image counts |
 
 ## 7. Risks and open items
 
 - **`us-map.png` provenance is unknown.** Revanth added it (`2601bfe`) with no source or
-  licence. Ask Revanth before reusing it; if it can't be confirmed, both their game and this
-  one need a replacement map.
+  licence. Ask Revanth now. The build does not wait: build and verify with `us-map.png`.
+  **Gate before opening the MR:** if the source and licence aren't confirmed by then, switch
+  this game to the fallback below and re-run §4.5 steps 3–6 for the party file.
+  - **Fallback map:** in the scratchpad, render the contiguous US state outlines from the
+    US Census Bureau cartographic boundary file `cb_2018_us_state_20m` (public domain,
+    US government work) in the same style (outlines only, no labels, white background),
+    at 3580 × 2282 or smaller, ≤ 2 MB. Same id `us-map` and same alt text. Targets then come
+    straight from the plotting transform of the two coordinates in §5 (no border
+    interpolation needed); the radii are unchanged. Record the source in §6.
+  - Revanth's own game is theirs to fix; tell them the outcome.
 - **The charts can't be regenerated by a TA**, because the script isn't committed. §6 is the
   mitigation; it makes the answers checkable but not reproducible.
 - **"Counting overseas territories" (party Q7)** is the only fact with a definitional caveat.
