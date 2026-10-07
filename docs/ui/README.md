@@ -37,6 +37,9 @@ Each pair therefore compares colour and design, not layout at the target size.
   before set was taken.
 - The before set had no capture of the player game-over screen. A file under that name showed
   the host game-over screen and was removed.
+- The five `*-slider` screens have no before image because the slider question type (T7) was
+  designed and built after T9 merged, so it never existed on the pre-T9 palette. It used the
+  theme tokens from its first commit.
 
 | Screen | Before | After, dark | After, light | What changed |
 |---|---|---|---|---|
@@ -58,7 +61,21 @@ Each pair therefore compares colour and design, not layout at the target size.
 | admin-users | [before](before/admin-users.png) | [dark](after/dark/admin-users.png) | [light](after/light/admin-users.png) | Sidebar on tokens with a labelled toggle; user rows as panels; role badges follow the badge convention. |
 | admin-access | [before](before/admin-access.png) | [dark](after/dark/admin-access.png) | [light](after/light/admin-access.png) | Shown with a course selected (the before has none): grant panels, role selects and borders on tokens. |
 | admin-question-editor-map | [before](before/admin-question-editor-map.png) | [dark](after/dark/admin-question-editor-map.png) | [light](after/light/admin-question-editor-map.png) | Shown with the map-pin editor open (the before shows the question list): form controls and file button on tokens; overlays unchanged. |
+| host-question-slider | — | [dark](after/dark/host-question-slider.png) | [light](after/light/host-question-slider.png) | Slider question on the projector: the range with its end values and step, and the prompt image on a white tile in both themes, so the chart reads the same. |
+| host-results-slider | — | [dark](after/dark/host-results-slider.png) | [light](after/light/host-results-slider.png) | Answer histogram in neutral bars; the target line and its label in the success colour, with the count above each bar. |
+| player-question-slider | — | [dark](after/dark/player-question-slider.png) | [light](after/light/player-question-slider.png) | Large value readout, a 44px thumb between − / + step buttons, and the Confirm button; shown with keyboard focus on the range, so the focus outline is visible. |
+| player-results-slider | — | [dark](after/dark/player-results-slider.png) | [light](after/light/player-results-slider.png) | Outcome text in the status colour ("Close — partial credit"); the target and the player's own value are labelled in text, so the result isn't colour-only. |
+| admin-question-editor-slider | — | [dark](after/dark/admin-question-editor-slider.png) | [light](after/light/admin-question-editor-slider.png) | The slider editor: presets, min/max/step/unit inputs, end labels, and the target slider paired with a number input, all on tokens. |
 | admin-sessions-export | [before](before/admin-sessions-export.png) | [dark](after/dark/admin-sessions-export.png) | [light](after/light/admin-sessions-export.png) | Status chips follow the badge convention ("Completed" is neutral); the selected export format shows a ✓. |
+
+### Slider screens (added 2026-10-06)
+
+The same method as above (nginx production build, headless Chromium through Playwright, the
+same viewports, both emulated colour schemes), with the T6 game
+[`sample_games/sbmarcus2_intro_stats_classroom.json`](../../sample_games/sbmarcus2_intro_stats_classroom.json)
+in course "Sample games", question 2 ("Estimate the correlation coefficient r"). It had a host,
+20 simulated players and one browser player, who answered −0.38 (target −0.45). The results
+screens were taken before every simulated player had answered, so the counts are partial.
 
 ## Verification checklist (§4.19)
 
