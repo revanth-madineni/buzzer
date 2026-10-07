@@ -1,6 +1,6 @@
 # T7 — Slider Question Type (party)
 
-Status: agreed design, **goldfish-tested 2026-10-06 and revised** (see §7). Written 2026-10-06.
+Status: **implemented 2026-10-06** after a goldfish test and revision (see §7, §8). Written 2026-10-06.
 Scope: the second of the two T7 types (the party one). The classroom type is `map_pin`
 (`docs/plans/t7-map-pin.md`), which already satisfies T7's canvas requirement, so this type is
 not canvas-based.
@@ -441,7 +441,8 @@ Make these changes in **both** `frontend/admin/src/pages/QuestionEditorPage.tsx`
 - **Type select:** add "Slider (closest guess)".
 - **`FormState` / `defaultForm`:** `sliderMin` (0), `sliderMax` (100), `sliderStep` (1),
   `sliderUnit` (""), `sliderShowValue` (true), `sliderMinLabel` (""), `sliderMaxLabel` (""),
-  `sliderTarget` (50), `sliderFullRadius` (0.05), `sliderZeroRadius` (0.30). Keep the existing
+  `sliderTarget` (50), `sliderFullRadius` (5), `sliderZeroRadius` (30) — percentages, see
+  below. Keep the existing
   map_pin radius fields separate; don't reuse them.
 - **Preset buttons** above the fields:
   - **Numeric** sets `showValue: true` and leaves the range alone.
@@ -464,7 +465,8 @@ Make these changes in **both** `frontend/admin/src/pages/QuestionEditorPage.tsx`
   `SliderInput` component (that lives only in the player app). Dragging it sets `sliderTarget`,
   so the target is always on the grid. A number input next to it shows the snapped value.
   Typing an off-grid value shows the same error the server would.
-- **When the range changes** (min, max or step edited, or a preset clicked):
+- **When the range changes** (min, max or step committed on blur, or a preset clicked; not on
+  every keystroke, because typing "100" into max passes through 1 and would clamp the target):
   - if the new geometry is valid, `sliderTarget` is **re-snapped and clamped** to the new grid
     (`indexValue(geom, clamp(snapIndex(geom, target), 0, n))`), silently;
   - if the new geometry is invalid (e.g. max ≤ min while typing), the target is left as it
@@ -602,3 +604,21 @@ discussion. Changes made in response:
 | Radius inputs: percent or fraction? | Percent in the form, fraction in the payload (§4.11) |
 | Screen readers would read raw numbers on a spectrum | `aria-valuetext` = `positionText` (§4.9) |
 | Smaller gaps | Empty-histogram state and one bar/marker coordinate system (§4.10); scale hidden while locked; editor preview is a plain range input; `sessionStorage` format; `typeLabel` location; `slider_value` returns `int` when `D = 0`; value-0 scoring test |
+
+## 8. Implementation notes (2026-10-06)
+
+Where the code differs from, or adds to, the text above:
+
+- **`services/slider_math.py`** holds every pure helper (§4.2 allowed this). `game_service`
+  imports `schemas.admin`, so the validator couldn't import `game_service`. `game_service`
+  keeps only the pieces that need `map_pin_fraction` or the question row (`slider_reveal`,
+  `slider_stats`, `slider_answer_index`, `slider_dist_key`, `_score_slider`).
+- **`slider_geometry` returns `(min, max, step, N, D)`**: `max` is needed for formatting.
+- **Range re-snap on blur** in the editors (§4.11 now says so).
+- **`points_awarded` is a single-precision column**, so a slider total such as 4.8 + 10 reads
+  back as 14.800000190734863. This existed before; the integration test compares with a
+  tolerance.
+- **Found while clicking through, not fixed (out of scope):** both game apps' `GameLayout`
+  socket effect depends on `[code, navigate]`, and `navigate` changes on every route change,
+  so the socket reconnects on every phase navigation. An event that arrives in that gap is
+  lost; in one headless run a player missed its `question_results`.

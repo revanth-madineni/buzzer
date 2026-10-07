@@ -35,6 +35,13 @@ game state here; the map canvas and `AuthImage` load images through `lib/images.
   the point. Reveal (`reveal`, `myPin`): target dot, solid `fullRadius` and dashed
   `zeroRadius` circles (r × drawW pixels), and the player's own pin. While `disabled`, the pin
   is drawn in `mapColor('pin-disabled')` (`lib/mapPin.ts`).
+- `SliderInput.tsx` (T7 slider) — works in step indices. Interactive (`config`, `index`,
+  `onIndexChange`, `disabled`): a native `<input type="range" class="slider-range">` (44px
+  thumb, styled in `../index.css` from tokens) between "One step left/right" buttons, the
+  value in large type when `showValue`, end labels below, `aria-valuetext` from
+  `positionText` (so a spectrum reads "35% of the way from Ice cold to Lava"). Reveal
+  (`reveal`, `myIndex`): a static track with the full-credit band (`success-soft`), the
+  target (`success`) and the player's marker (`accent`).
 - `AuthImage.tsx` (T8) — **byte-identical in all three apps**. Renders an uploaded image by
   ID (`imageId`, `alt`, `className`) through `lib/images.ts` (Bearer header, blob URL, shared
   cache, so an image preloaded from `game_images` renders at once), always `object-contain`

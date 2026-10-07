@@ -114,7 +114,12 @@ their own points and rank. The host receives answer distributions and an anonymo
   the DB row and only afterwards adds to the Redis answered set. Two concurrent submits from the
   same user (double tap, two tabs) can both pass the check, and the DB has no unique constraint
   to stop it.
-- **Answer payloads are only validated for `multi_select` and `map_pin`.** map_pin answers
+- **Slider answers are canonicalised.** `on_submit_answer` requires exactly `{"value": n}`
+  in range (`game_service.slider_answer_index`), else a code-less (fatal) `error` "slider
+  answer must include a value within the slider's range". A valid answer is **replaced** by
+  `{"value": slider_value(config, k)}` before `record_answer`, so `SessionScore.answer_data`
+  never holds float noise.
+- **Answer payloads are only validated for `multi_select`, `map_pin` and `slider`.** map_pin answers
   must be exactly `{x, y}` with finite numbers in [0, 1] (`game_service.map_pin_click`; the
   explicit finiteness check matters because Python's `json` accepts a literal `NaN`).
   For other types, a non-int `selectedIndex` makes
@@ -143,7 +148,8 @@ their own points and rank. The host receives answer distributions and an anonymo
   the proxy overwrites it.
 - Players with no score rows get rank `len(players)` (tied last), because the leaderboard comes
   from MySQL `SessionScore` rows while the player list comes from Redis.
-- `_answer_reveal` here is one of four copies (see `services/CLAUDE.md`). For `multi_select` it
+- `_answer_reveal` here is one of four copies (see `services/CLAUDE.md`); slider and
+  map_pin are checked before the COMPLETENESS return. For `multi_select` it
   sends the full `answer_points` list to players.
 - `socket_app` (line 61) is unused; `main.py` builds its own `ASGIApp` wrapper.
 - `host_advance` and `host_lock_question` swallow all exceptions (logged as

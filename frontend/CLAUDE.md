@@ -142,7 +142,8 @@ Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
   `scripts/check_theme.py` checks it (one md5 per group). Edit one copy, then copy it to the
   others:
   - in all three apps: `tailwind.config.ts`, `lib/theme.ts`, `components/ThemeToggle.tsx`
-    (T9), `lib/mapPin.ts`, `lib/images.ts`, `components/MapCanvas.tsx` (T7) and
+    (T9), `lib/mapPin.ts`, `lib/slider.ts` (T7 slider: the client mirror of
+    `backend/app/services/slider_math.py`), `lib/images.ts`, `components/MapCanvas.tsx` (T7) and
     `components/AuthImage.tsx` (T8: an uploaded image by ID, `object-contain`, with loading
     and error placeholders);
   - in player and admin: `src/theme.css` (the host's is the same text plus the stage blocks);
@@ -160,9 +161,15 @@ Cross-app issues. Per-app details are in each `src/CLAUDE.md`.
   which mix `answer_points` with fill-in-the-blank's camelCase), the host `QuestionPage` /
   `ResultsPage` / `GameOverPage`, the player `QuestionPage` / `ResultsPage` / `GameOverPage`,
   both `types/game.ts`, and the backend scoring and reveal code. map_pin (T7) is the worked
-  example: see `docs/plans/t7-map-pin.md`. T8's prompt and option images touched the same set
+  example: see `docs/plans/t7-map-pin.md`. slider (T7, `docs/plans/t7-slider.md`) touched
+  the same set plus a new byte-identical `lib/slider.ts`, the player `SliderInput` and the
+  host `SliderHistogram`. T8's prompt and option images touched the same set
   of files without a new type (`docs/plans/t8-images.md`).
-- **No frontend test runner.** None of the three apps can run tests, so the map-pin canvas,
+- **No frontend test runner.** `lib/slider.ts` was compiled with `tsc` and checked in Node
+  against `slider_math.py` on 9 configs (indices, values, bins, target lines all equal), and
+  the slider UI was clicked through once in headless Chromium (editor, a live game with two
+  phone-sized players in both themes, game over, report). Nothing re-runs either.
+  None of the three apps can run tests, so the map-pin canvas,
   pointer handling, image loading and the player's non-fatal late-answer handling were only
   type-checked and built. The T8 image UI (editors' image fields, `ImagePicker`, both Images
   pages, the player's image-option grid, the host's prompt image and all the thumbnails) has
