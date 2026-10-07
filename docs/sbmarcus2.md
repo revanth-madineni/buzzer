@@ -39,6 +39,7 @@ I followed the Elephant/Goldfish process for everything I designed, using the re
 - [docs/plans/t8-images.md](plans/t8-images.md): image support (T8)
 - [docs/plans/t7-slider.md](plans/t7-slider.md): the slider question type, our party type (T7)
 - [docs/plans/t6-sbmarcus2-games.md](plans/t6-sbmarcus2-games.md): my two sample games (T6)
+- [docs/plans/course-delete.md](plans/course-delete.md): an admin course delete, so the tests can clean up after themselves (T5)
 
 **T8 images.** The Elephant session started from instructions.md and the codebase, and the design discussion was mostly me answering its questions:
 - Prompt images are projector-only.
@@ -68,6 +69,13 @@ After implementing, I updated the spec and context docs to match what was actual
 
 It also suggested changing question-type behaviour, which I said was out of scope; this task was game files only. During the build, the map turned out to include Alaska and Hawaii insets, so the agreed alt text ("contiguous United States") was wrong. I fixed the spec first and then the file, which is the order T3 asks for.
 
+**Course delete.** This one came out of T6: our integration tests had left 713 junk courses in the dev database, because nothing could delete a course. The design discussion was short. I chose:
+- refuse to delete a course that still has games, sessions or images (409 `COURSE_NOT_EMPTY`), since a played course is gradebook history;
+- delete its roster and access grants along with it, since those are just configuration;
+- leave alone a separate bug it found (the admin game delete doesn't clear Redis).
+
+The goldfish test found the most important hole of any of my specs. The spec said to delete the course the normal SQLAlchemy way and relied on MySQL to refuse if a game was added in the middle. But SQLAlchemy's ORM looks at `Course.games` first and quietly sets each game's `course_id` to NULL, so the delete would have *succeeded* and unassigned the game. No test would have caught it, because the race window can't be hit reliably. The fix was to switch to a "Core" delete: one plain `DELETE FROM courses WHERE id = ?` statement, so only the database's own rules decide. I had to ask what a Core delete was before agreeing to it. The goldfish also flagged assumptions it couldn't confirm from the context docs (that the roster and access tables really cascade, that `GET /admin/courses/{id}` exists, and that a missing token gets 401 rather than 403). Checking them in the code proved them all right, so the spec now cites where each one comes from instead of just asserting it.
+
 **Did it change how I implemented?** Yes, mostly in where the time went. Implementation was the fast part, because the spec already said which files to touch and what every edge case should do. The goldfish tests were worth it every time: each one found at least one thing where two parts of the system would have quietly disagreed. Those are exactly the bugs that are hard to find later. The cost is that it's slower to get started, and the specs get long. The slider spec is detailed enough that reviewing it took real effort.
 
 The slider screens are themed with T9's tokens and are in the screenshot set: [docs/ui/README.md](ui/README.md) (`*-slider` rows), for example [player question, dark](ui/after/dark/player-question-slider.png) and [host results, light](ui/after/light/host-results-slider.png). They have no "before" images, because the slider was built after T9 merged.
@@ -79,9 +87,10 @@ I used Claude Code, mostly through the VS Code extension. I used it for everythi
 **Where it helped:**
 - **Big vertical slices.** T8 and the slider each touched the backend, the three frontends, tests, the simulator and the context docs. With a goldfish-tested spec, it could implement them in one pass, including integration tests.
 - **Checking its own numbers.** For the sample games, it generated the correlation charts with the exact target r by construction. It measured the map targets from the image's state borders instead of guessing, and drew every target with its radius circles so I could check them by eye.
-- **Doing the tedious verification.** It ran ruff, `tsc` and `check_theme.py` before every MR, imported the games through the API, and captured the slider screenshots by driving a real game with Playwright.
+- **Doing the tedious verification.** It ran ruff, `tsc` and `check_theme.py` before every MR, imported the games through the API, and captured the slider screenshots by driving a real game with Playwright. For course delete it ran the full integration suite against the live stack (188 passed, 2 skipped) and counted the courses in the database before and after, 2 both times, to prove the tests no longer leak. It also clicked the new Delete button in a headless browser: cancel, delete an empty course, and the 409 message for a course with a game.
 
 **Where it fell short:**
+- **Its first spec can be confidently wrong.** The course-delete spec claimed MySQL would catch a race that the ORM would actually have hidden. The Elephant session wrote that with full confidence; only the fresh goldfish session caught it. It also used terms like "Core delete" without explaining them until I asked.
 - **Scope.** It tends to drift. In the T6 goldfish test it suggested changing question-type behaviour, and I had to pull it back to "game files only". I also had to push back during the T8 design (multi-select image options, whether images should move between courses).
 - **Wordy writing.** Specs and MR descriptions are long. Push options can't even fit its MR descriptions, so it gave me a separate one to paste.
 - **Destructive actions.** When it tried to delete the leftover game sessions from its screenshot runs, auto mode's permission check blocked it, and it left them for me instead of working around the block. That's the right behaviour, but I still had to clean up.
@@ -156,12 +165,22 @@ T6 sample games (branch `feat/t6-sbmarcus2-sample-games`, merged through the sli
 Wrap-up (branches `docs/t9-slider-screenshots`, `docs/sbmarcus2-t10`):
 - `2026-10-06_20-36-45_641d2cec.md`: what's left in instructions.md if my changes merge
 - `2026-10-06_20-45-37_641d2cec.md`: play check done; drop the licensing gate; capture slider screenshots
-- later logs from session `641d2cec`: open MR !15 for the screenshots and draft this document
+- `2026-10-06_20-52-27_641d2cec.md`: open MR !15 for the screenshots and draft this document
+
+Course delete (branch `feat/course-delete`):
+- `2026-10-06_21-08-32_641d2cec.md`: new branch; scope the course-delete design
+- `2026-10-06_21-13-33_641d2cec.md`: answer the design questions (refuse if not empty, roster goes with the course, leave the Redis bug alone); write and commit the spec
+- `2026-10-06_21-15-07_fc00faae.md`: goldfish test in a fresh session
+- `2026-10-06_21-16-22_fc00faae.md`: what a Core delete is
+- `2026-10-06_21-18-07_fc00faae.md`: accept the Core delete; revise the spec and commit
+- `2026-10-06_21-23-53_fc00faae.md`: implement, then test it live (full suite, course counts, browser click-through)
+- later logs from session `fc00faae`: merge main and bring this document up to date
 
 ## Best Practices Learned
 
 - **Spec-first moves the work, it doesn't remove it.** Writing and goldfish-testing a spec is slower up front, but implementation becomes almost mechanical. The goldfish test's real value is catching places where two parts of the system would disagree (backend vs. frontend rounding, two definitions of "in range"). No single-file review catches those.
 - **Duplication needs to be written down.** When code is copied on purpose (the host and admin editors, byte-identical lib files in three apps, Python math mirrored in TypeScript), the context docs are the only thing that tells the next person, or the next AI session, to change both.
-- **Tests that create things need to clean them up.** Our integration tests made a new course every run with no way to delete it, and the dev database ended up with 713 junk courses in every course picker. I added a prune script, but the real fix is a delete path plus teardown in the tests.
+- **Tests that create things need to clean them up.** Our integration tests made a new course every run with no way to delete it, and the dev database ended up with 713 junk courses in every course picker. The prune script cleaned up once, but the real fix was a delete path plus teardown, so I built it: an admin course delete, and test helpers that delete every course they create, last. A full run now leaves the course count exactly where it started.
+- **Trust the database, not the ORM, for safety rules.** An ORM does its own work before it talks to the database (here, nulling foreign keys), and that work can quietly undo a constraint you're counting on. When a rule like "don't delete a course that has games" matters, let the database's foreign keys enforce it, and check what the ORM will actually send.
 - **Keep MRs to one task.** I merged my T6 games into the slider branch and opened one MR for both. It worked, but it made the MR harder to review than two small ones would have been.
 - **Verify with the real thing.** Lint and type checks passing didn't tell me the games worked. Importing them through the API, drawing the map targets on the images, and playing a round with simulated players did.
