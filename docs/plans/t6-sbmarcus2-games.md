@@ -300,7 +300,9 @@ Targets read from `ax.transData` and divided by (1200, 800). Distances are in im
 - **Alt text vs. answerability.** Chart alt text is neutral, so screen-reader users can't
   answer the chart questions. That's accepted for a visual-estimation game. The map questions
   have the same limit.
-- **Course list.** The dev database already has ~713 leftover test courses (no
+- **Course list.** The dev database had ~713 leftover integration-test courses (no
   course-delete path). Import into one named real course, so this work adds no more litter.
+  `scripts/prune_test_courses.py` now clears the leftovers (dry run by default); the tests
+  still create a course per run, which needs a course-delete endpoint to fix properly.
 - **Team overlap.** Revanth's party game doesn't exist yet. Tell them this one is a
   slider-heavy estimation game, so theirs can differ.
