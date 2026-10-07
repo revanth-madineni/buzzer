@@ -1,3 +1,5 @@
+import type { SliderRevealData, SliderSettings } from '../lib/slider';
+
 export interface SyncStatePayload {
   status: 'LOBBY' | 'IN_PROGRESS' | 'COMPLETED' | 'ABANDONED';
   playerCount: number;
@@ -25,7 +27,8 @@ export type QuestionType =
   | 'true_false'
   | 'fill_in_the_blank'
   | 'multi_select'
-  | 'map_pin';
+  | 'map_pin'
+  | 'slider';
 
 /** map_pin config: public by design (the target lives in answer_data, never sent). */
 export interface MapPinConfig {
@@ -40,7 +43,15 @@ export interface MapPinAnswer {
   y: number;
 }
 
-export interface QuestionConfig extends Partial<MapPinConfig> {
+/** slider config (T7 slider spec §4.1): public; the target lives in answer_data. */
+export type SliderConfig = SliderSettings;
+
+/** A slider answer: the canonical value of the chosen step. */
+export interface SliderAnswer {
+  value: number;
+}
+
+export interface QuestionConfig extends Partial<MapPinConfig>, SliderConfig {
   options?: string[];
   maxLength?: number;
   /** T8: one image shown with the prompt (projector only); any question type. */
@@ -88,13 +99,20 @@ export interface MapPinReveal {
   zeroRadius: number;
 }
 
+/** Same reveal for both grading types (slider spec §4.3). Radii are fractions of the range. */
+export interface SliderReveal extends SliderRevealData {
+  type: 'slider';
+  gradingType: 'ACCURACY' | 'COMPLETENESS';
+}
+
 export type PlayerAnswerReveal =
   | { type: 'multiple_choice'; correctIndices: number[] }
   | { type: 'true_false'; correctValue: boolean }
   | { type: 'fill_in_the_blank'; acceptedAnswers: string[]; editDistance: number }
   | { type: 'completeness' }
   | { type: 'multi_select'; answerPoints: number[] }
-  | MapPinReveal;
+  | MapPinReveal
+  | SliderReveal;
 
 export interface PlayerResultsPayload {
   questionId: number;
@@ -114,7 +132,7 @@ export interface QuestionSummaryItem {
   pointsAwarded: number;
   maxPoints: number;
   answerTimeMs: number | null;
-  playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[]; x?: number; y?: number } | null;
+  playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[]; x?: number; y?: number; value?: number } | null;
   answerReveal: PlayerAnswerReveal;
   imageAlt?: ImageAltMap;
 }

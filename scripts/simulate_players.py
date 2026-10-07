@@ -23,6 +23,9 @@ All question types are handled automatically:
                       answers from --fitb-words
   map_pin           — random {x, y} tap on the image; if --game-json supplied,
                       accurate players tap near the target
+  slider            — random {value} on the slider's grid; if --game-json
+                      supplied, accurate players land near the target (σ = 5%
+                      of the range)
 
 Usage:
     # Basic — 20 players, default profile mix, default FITB word pool
@@ -270,7 +273,27 @@ class SimPlayer:
                 }
             return {"x": random.random(), "y": random.random()}
 
+        if q_type == "slider":
+            return self._slider_answer(q.get("config", {}), jq)
+
         return None  # unknown type
+
+    def _slider_answer(self, config: dict, jq: dict | None) -> dict | None:
+        """Clamped to [min, max] and snapped to the grid with the server's formula
+        (game_service / slider_math: floor(k + 0.5), ties up)."""
+        lo, hi, step = config.get("min"), config.get("max"), config.get("step")
+        if not all(isinstance(v, (int, float)) for v in (lo, hi, step)) or step <= 0:
+            return None
+        n = round((hi - lo) / step)
+        if n < 1:
+            return None
+        target = (jq or {}).get("answer_data", {}).get("target")
+        if isinstance(target, (int, float)) and random.random() < self.profile.accuracy:
+            value = random.gauss(target, 0.05 * (hi - lo))
+        else:
+            value = random.uniform(lo, hi)
+        k = min(max(math.floor((value - lo) / step + 0.5), 0), n)
+        return {"value": round(lo + k * step, 6)}
 
     def _answer_str(self, answer: dict) -> str:
         if "text" in answer:
@@ -283,6 +306,8 @@ class SimPlayer:
             return str(answer["selectedValue"])
         if "x" in answer and "y" in answer:
             return f"pin ({answer['x']:.2f}, {answer['y']:.2f})"
+        if "value" in answer:
+            return f"value {answer['value']:g}"
         return repr(answer)
 
     # ── per-question handler ──────────────────────────────────────────────────

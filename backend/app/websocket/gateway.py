@@ -32,6 +32,7 @@ from ..redis_client import get_redis
 from ..services import game_service, image_service
 from ..services import state_service as state
 from ..services.auth_service import get_user_by_id
+from ..services.slider_math import slider_value
 from . import events as E
 from .middleware import authenticate_socket
 
@@ -156,6 +157,10 @@ def _answer_reveal(q: Question) -> dict:
     """
     if q.type == "map_pin":  # before COMPLETENESS: both grading types get the map
         return game_service.map_pin_reveal(
+            q.grading_type, q.config or {}, q.answer_data or {}
+        )
+    if q.type == "slider":  # before COMPLETENESS: both grading types get the scale
+        return game_service.slider_reveal(
             q.grading_type, q.config or {}, q.answer_data or {}
         )
     if q.grading_type == "COMPLETENESS":
@@ -1202,6 +1207,17 @@ async def on_submit_answer(sid: str, data: dict) -> None:
                 sid, "map_pin answer must include x and y between 0 and 1"
             )
             return
+
+        # Exactly {"value": number} within range; stored as the canonical snapped value
+        # so SessionScore.answer_data never carries float noise (slider spec §4.4).
+        if question.type == "slider":
+            k = game_service.slider_answer_index(question.config or {}, answer_data)
+            if k is None:
+                await _emit_error(
+                    sid, "slider answer must include a value within the slider's range"
+                )
+                return
+            answer_data = {"value": slider_value(question.config, k)}
 
         if question.type == "multi_select":
             indices = answer_data.get("selectedIndices")

@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import type { PlayerAnswerReveal, QuestionSummaryItem } from '../../types/game';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { AuthImage } from '../../components/AuthImage';
+import { formatValue, inRange, sliderGeometry } from '../../lib/slider';
 
 function describePlayerAnswer(
   playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[] } | null,
@@ -61,6 +62,22 @@ function describeCorrectAnswer(
   return '';
 }
 
+/**
+ * slider recap (slider spec §4.9): with numbers shown, "You: 42 hot dogs · Answer: 58 hot
+ * dogs"; without, points earned / possible like map_pin.
+ */
+function sliderRecap(item: QuestionSummaryItem): string {
+  const reveal = item.answerReveal;
+  const value = item.playerAnswer?.value;
+  const geom = reveal.type === 'slider' ? sliderGeometry(reveal) : null;
+  if (reveal.type !== 'slider' || !geom || reveal.showValue === false || typeof value !== 'number') {
+    return `${item.pointsAwarded.toLocaleString()} / ${item.maxPoints.toLocaleString()} pts`;
+  }
+  const you = `You: ${formatValue(geom, value, reveal.unit)}`;
+  if (reveal.target === null || !inRange(geom, reveal.target)) return you;
+  return `${you} · Answer: ${formatValue(geom, reveal.target, reveal.unit)}`;
+}
+
 /** T8: option indices as letters, with a thumbnail for image options and text otherwise. */
 function OptionChoices({ item, indices }: { item: QuestionSummaryItem; indices: number[] }) {
   const options = item.config.options ?? [];
@@ -108,7 +125,7 @@ function QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number
   const options = item.config.options;
   const isCompleteness =
     item.answerReveal.type === 'completeness' ||
-    (item.type === 'map_pin' && item.gradingType === 'COMPLETENESS');
+    ((item.type === 'map_pin' || item.type === 'slider') && item.gradingType === 'COMPLETENESS');
   const noAnswer = !item.playerAnswer;
   const isCorrect = !isCompleteness && !noAnswer && item.pointsAwarded > 0;
   const showCorrectAnswer = !isCompleteness && !isCorrect;
@@ -117,7 +134,9 @@ function QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number
   const playerAnswerLabel =
     item.type === 'map_pin' && !noAnswer
       ? `${item.pointsAwarded.toLocaleString()} / ${item.maxPoints.toLocaleString()} pts`
-      : describePlayerAnswer(item.playerAnswer, item.type, options);
+      : item.type === 'slider' && !noAnswer
+        ? sliderRecap(item)
+        : describePlayerAnswer(item.playerAnswer, item.type, options);
   const correctAnswerLabel = !isCompleteness
     ? describeCorrectAnswer(item.answerReveal, options)
     : '';

@@ -19,8 +19,31 @@ import {
   type ImageListItem,
 } from '../../components/ImagePicker';
 import { drawTarget, type DrawRect, type Point } from '../../lib/mapPin';
+import {
+  decimalsOf,
+  endLabels,
+  formatValue,
+  freePoints,
+  indexValue,
+  inRange,
+  onGrid,
+  pct,
+  positionText,
+  sliderGeometry,
+  snapIndex,
+  SLIDER_MAX_ABS,
+  SLIDER_MAX_STEPS,
+  SLIDER_MIN_FULL_RADIUS,
+  type SliderSettings,
+} from '../../lib/slider';
 
-type QuestionType = 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select' | 'map_pin';
+type QuestionType =
+  | 'multiple_choice'
+  | 'true_false'
+  | 'fill_in_the_blank'
+  | 'multi_select'
+  | 'map_pin'
+  | 'slider';
 type GradingType = 'ACCURACY' | 'COMPLETENESS';
 
 interface Question {
@@ -127,6 +150,17 @@ interface FormState {
   targetY: number | null;
   fullRadius: number;
   zeroRadius: number;
+  // slider (T7): radii held as percentages of the range (5 = 5%), sent as fractions
+  sliderMin: number;
+  sliderMax: number;
+  sliderStep: number;
+  sliderUnit: string;
+  sliderShowValue: boolean;
+  sliderMinLabel: string;
+  sliderMaxLabel: string;
+  sliderTarget: number;
+  sliderFullRadius: number;
+  sliderZeroRadius: number;
 }
 
 // Server limits (backend schemas/admin.py). The editor defaults are higher than the floor.
@@ -169,6 +203,16 @@ const defaultForm = (): FormState => ({
   targetY: null,
   fullRadius: 0.04,
   zeroRadius: 0.15,
+  sliderMin: 0,
+  sliderMax: 100,
+  sliderStep: 1,
+  sliderUnit: '',
+  sliderShowValue: true,
+  sliderMinLabel: '',
+  sliderMaxLabel: '',
+  sliderTarget: 50,
+  sliderFullRadius: 5,
+  sliderZeroRadius: 30,
 });
 
 function questionToForm(q: Question): FormState {
@@ -208,6 +252,19 @@ function questionToForm(q: Question): FormState {
     base.msOptions = opts.length
       ? opts.map((text, i) => ({ text, points: pts[i] ?? 1, imageId: optionImageIds[i] ?? null }))
       : defaultForm().msOptions;
+  } else if (q.type === 'slider') {
+    const cfg = q.config as SliderSettings;
+    const ad = q.answer_data as { target?: number; fullRadius?: number; zeroRadius?: number };
+    base.sliderMin = cfg.min ?? base.sliderMin;
+    base.sliderMax = cfg.max ?? base.sliderMax;
+    base.sliderStep = cfg.step ?? base.sliderStep;
+    base.sliderUnit = cfg.unit ?? '';
+    base.sliderShowValue = cfg.showValue !== false;
+    base.sliderMinLabel = cfg.minLabel ?? '';
+    base.sliderMaxLabel = cfg.maxLabel ?? '';
+    base.sliderTarget = ad.target ?? base.sliderTarget;
+    if (typeof ad.fullRadius === 'number') base.sliderFullRadius = Number((ad.fullRadius * 100).toFixed(4));
+    if (typeof ad.zeroRadius === 'number') base.sliderZeroRadius = Number((ad.zeroRadius * 100).toFixed(4));
   } else if (q.type === 'map_pin') {
     const cfg = q.config as { imageId?: string; imageWidth?: number; imageHeight?: number };
     const ad = q.answer_data as {
@@ -243,6 +300,14 @@ function formToPayload(form: FormState) {
     const p = buildMsPayload(form.msOptions.filter((o) => o.imageId || o.text.trim()));
     config = p.config;
     answer_data = p.answer_data;
+  } else if (form.type === 'slider') {
+    // Same answer_data for both grading types: both show the same reveal.
+    config = { ...sliderConfigOf(form) };
+    answer_data = {
+      target: form.sliderTarget,
+      fullRadius: pctToFraction(form.sliderFullRadius),
+      zeroRadius: pctToFraction(form.sliderZeroRadius),
+    };
   } else if (form.type === 'map_pin') {
     // Same answer_data for both grading types: both show the same reveal. The server
     // fills in imageWidth/imageHeight from the stored image.
@@ -259,7 +324,7 @@ function formToPayload(form: FormState) {
   }
   if (form.promptImageId) config = { ...config, promptImageId: form.promptImageId };
   const points_value =
-    form.grading === 'COMPLETENESS' || form.type === 'map_pin'
+    form.grading === 'COMPLETENESS' || form.type === 'map_pin' || form.type === 'slider'
       ? form.pointsValue
       : form.type === 'multiple_choice'
       ? Math.max(0, ...form.mcOptions.map((o) => o.points))
@@ -317,6 +382,299 @@ function RadiusInput({
 }
 
 type SetField = <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+
+// ---- slider (T7 slider spec §4.11) ----
+
+// Server limits (backend services/slider_math.py, schemas/admin.py).
+const SLIDER_MAX_UNIT = 20;
+const SLIDER_MAX_LABEL = 40;
+
+/** The slider's config as the server will see it (also what the preview uses). */
+function sliderConfigOf(form: FormState): SliderSettings {
+  const config: SliderSettings = {
+    min: form.sliderMin,
+    max: form.sliderMax,
+    step: form.sliderStep,
+    showValue: form.sliderShowValue,
+  };
+  if (form.sliderUnit.trim()) config.unit = form.sliderUnit.trim();
+  if (form.sliderMinLabel.trim()) config.minLabel = form.sliderMinLabel.trim();
+  if (form.sliderMaxLabel.trim()) config.maxLabel = form.sliderMaxLabel.trim();
+  return config;
+}
+
+/** Why the slider's range is invalid (the server's §4.1 config rules), or null. */
+function sliderRangeError(form: FormState): string | null {
+  const { sliderMin: min, sliderMax: max, sliderStep: step } = form;
+  if (![min, max, step].every(Number.isFinite)) return 'Min, max and step must be numbers.';
+  if (Math.abs(min) > SLIDER_MAX_ABS || Math.abs(max) > SLIDER_MAX_ABS)
+    return 'Min and max must be between -1,000,000,000 and 1,000,000,000.';
+  if (!(max > min)) return 'Max must be greater than min.';
+  if (!(step > 0)) return 'Step must be greater than 0.';
+  if (decimalsOf(min) === null) return 'Min can have at most 6 decimals.';
+  if (decimalsOf(step) === null) return 'Step can have at most 6 decimals.';
+  if (!sliderGeometry(sliderConfigOf(form)))
+    return `The range must be a whole number of steps, at most ${SLIDER_MAX_STEPS.toLocaleString('en-US')}.`;
+  return null;
+}
+
+/** Why a slider form can't be saved (every §4.1 rule, both grading types), or null. */
+function sliderFormError(form: FormState): string | null {
+  const rangeError = sliderRangeError(form);
+  if (rangeError) return rangeError;
+  const geom = sliderGeometry(sliderConfigOf(form))!;
+  if (form.sliderUnit.trim().length > SLIDER_MAX_UNIT)
+    return `The unit can be at most ${SLIDER_MAX_UNIT} characters.`;
+  const hasMin = !!form.sliderMinLabel.trim();
+  const hasMax = !!form.sliderMaxLabel.trim();
+  if (hasMin !== hasMax) return 'Give both end labels, or neither.';
+  if (form.sliderMinLabel.trim().length > SLIDER_MAX_LABEL || form.sliderMaxLabel.trim().length > SLIDER_MAX_LABEL)
+    return `End labels can be at most ${SLIDER_MAX_LABEL} characters.`;
+  if (!form.sliderShowValue && !hasMin) return 'Without numbers, the slider needs both end labels.';
+  if (!Number.isFinite(form.sliderTarget) || !onGrid(geom, form.sliderTarget))
+    return 'The target must be in range and on a step (min + a whole number of steps).';
+  const full = form.sliderFullRadius;
+  const zero = form.sliderZeroRadius;
+  if (!(full >= SLIDER_MIN_FULL_RADIUS * 100 && full < 100))
+    return 'Full credit must be within at least 1% and below 100% of the range.';
+  if (!(zero > full && zero <= 100))
+    return 'No-credit distance must be greater than full credit and at most 100%.';
+  return null;
+}
+
+/**
+ * Applies a range change and re-snaps the target onto the new grid when it is valid
+ * (§4.11). Called on commit (blur) and by the presets, not on every keystroke: typing
+ * "100" into max passes through 1 and 10, which would otherwise clamp the target to 1.
+ */
+function withSliderRange(prev: FormState, patch: Partial<FormState>): FormState {
+  const next = { ...prev, ...patch };
+  const geom = sliderGeometry(sliderConfigOf(next));
+  if (!geom || !Number.isFinite(next.sliderTarget)) return next;
+  return { ...next, sliderTarget: indexValue(geom, snapIndex(geom, next.sliderTarget)) };
+}
+
+/** Rounds a percentage from the form to the fraction sent to the server. */
+function pctToFraction(pct: number): number {
+  return Number((pct / 100).toFixed(6));
+}
+
+/** List line: "Slider — 0–100 hot dogs, target 58, ±5% → 30%" or "Slider — Ice cold ↔ Lava, target 35%". */
+function sliderSummary(q: Question): string {
+  const config = q.config as SliderSettings;
+  const ad = q.answer_data as { target?: number; fullRadius?: number; zeroRadius?: number };
+  const geom = sliderGeometry(config);
+  if (!geom || typeof ad.target !== 'number' || !inRange(geom, ad.target)) return 'Slider — (invalid settings)';
+  const kt = snapIndex(geom, ad.target);
+  const pctOf = (r: number | undefined) => (typeof r === 'number' ? `${Number((r * 100).toFixed(4))}%` : '?');
+  if (config.showValue === false) {
+    const [left, right] = endLabels(config, geom);
+    return `Slider — ${left} ↔ ${right}, target ${pct(geom, kt)}%`;
+  }
+  const range = `${formatValue(geom, geom.min)}–${formatValue(geom, geom.max, config.unit)}`;
+  return `Slider — ${range}, target ${formatValue(geom, indexValue(geom, kt))}, ±${pctOf(ad.fullRadius)} → ${pctOf(ad.zeroRadius)}`;
+}
+
+function SliderFields({
+  form,
+  set,
+  setRange,
+}: {
+  form: FormState;
+  set: SetField;
+  /** A range change that re-snaps the target (see withSliderRange). */
+  setRange: (patch: Partial<FormState>) => void;
+}) {
+  const config = sliderConfigOf(form);
+  const geom = sliderGeometry(config);
+  const rangeError = sliderRangeError(form);
+  const error = sliderFormError(form);
+  const targetIndex =
+    geom && Number.isFinite(form.sliderTarget) && inRange(geom, form.sliderTarget)
+      ? snapIndex(geom, form.sliderTarget)
+      : null;
+  const free =
+    geom && targetIndex !== null && !error
+      ? freePoints(geom, targetIndex, form.sliderFullRadius / 100, form.sliderZeroRadius / 100)
+      : 0;
+  const commit = () => setRange({});
+  const textClass =
+    'w-full rounded-lg border border-line-strong bg-surface-alt px-3 py-2 text-fg text-sm';
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-fg-muted">Preset:</span>
+        <Button type="button" variant="outline" size="sm" onClick={() => setRange({ sliderShowValue: true })}>
+          Numeric (closest guess)
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            setRange({
+              sliderMin: 0,
+              sliderMax: 100,
+              sliderStep: 1,
+              sliderShowValue: false,
+              sliderUnit: '',
+              sliderMinLabel: form.sliderMinLabel.trim() ? form.sliderMinLabel : 'Cold',
+              sliderMaxLabel: form.sliderMaxLabel.trim() ? form.sliderMaxLabel : 'Hot',
+            })
+          }
+        >
+          Spectrum (words, no numbers)
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-4">
+        {(
+          [
+            ['sliderMin', 'Min'],
+            ['sliderMax', 'Max'],
+            ['sliderStep', 'Step'],
+          ] as const
+        ).map(([key, label]) => (
+          <div key={key}>
+            <label className="block text-xs text-fg-muted mb-1">{label}</label>
+            <Input
+              type="number"
+              step="any"
+              value={Number.isFinite(form[key]) ? form[key] : ''}
+              onChange={(e) => set(key, e.target.value === '' ? NaN : Number(e.target.value))}
+              onBlur={commit}
+              className="w-32 text-sm"
+            />
+          </div>
+        ))}
+        <div className="flex-1 min-w-40">
+          <label className="block text-xs text-fg-muted mb-1">Unit (optional, after the number)</label>
+          <Input
+            placeholder="e.g. hot dogs"
+            value={form.sliderUnit}
+            maxLength={SLIDER_MAX_UNIT}
+            onChange={(e) => set('sliderUnit', e.target.value)}
+            className="text-sm"
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-4">
+        <div className="flex-1 min-w-40">
+          <label className="block text-xs text-fg-muted mb-1">Left end label (optional)</label>
+          <input
+            className={textClass}
+            placeholder="e.g. Ice cold"
+            value={form.sliderMinLabel}
+            maxLength={SLIDER_MAX_LABEL}
+            onChange={(e) => set('sliderMinLabel', e.target.value)}
+          />
+        </div>
+        <div className="flex-1 min-w-40">
+          <label className="block text-xs text-fg-muted mb-1">Right end label (optional)</label>
+          <input
+            className={textClass}
+            placeholder="e.g. Lava"
+            value={form.sliderMaxLabel}
+            maxLength={SLIDER_MAX_LABEL}
+            onChange={(e) => set('sliderMaxLabel', e.target.value)}
+          />
+        </div>
+      </div>
+
+      <label className="flex items-center gap-2 text-sm text-fg">
+        <input
+          type="checkbox"
+          checked={form.sliderShowValue}
+          onChange={(e) => set('sliderShowValue', e.target.checked)}
+        />
+        Show numbers to players
+      </label>
+
+      <div>
+        <label className="block text-xs text-fg-muted mb-1">Target — drag the slider or type a value</label>
+        {geom && !rangeError ? (
+          <div className="space-y-1">
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={geom.n}
+                step={1}
+                value={targetIndex ?? 0}
+                onChange={(e) => set('sliderTarget', indexValue(geom, Number(e.target.value)))}
+                aria-label="Target"
+                aria-valuetext={targetIndex !== null ? positionText(config, geom, targetIndex) : undefined}
+                className="flex-1"
+              />
+              <Input
+                type="number"
+                step="any"
+                value={Number.isFinite(form.sliderTarget) ? form.sliderTarget : ''}
+                onChange={(e) => set('sliderTarget', e.target.value === '' ? NaN : Number(e.target.value))}
+                className="w-32 text-sm"
+              />
+            </div>
+            <div className="flex justify-between gap-4 text-xs text-fg-muted">
+              <span>{endLabels(config, geom)[0]}</span>
+              <span className="text-fg font-semibold">
+                {targetIndex !== null ? positionText(config, geom, targetIndex) : '—'}
+              </span>
+              <span>{endLabels(config, geom)[1]}</span>
+            </div>
+          </div>
+        ) : (
+          <p className="text-danger-fg text-xs">{rangeError}</p>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-4">
+        <div>
+          <label className="block text-xs text-fg-muted mb-1">Full credit within ±…% of the range</label>
+          <Input
+            type="number"
+            min="1"
+            max="99"
+            step="any"
+            value={form.sliderFullRadius}
+            onChange={(e) => set('sliderFullRadius', Number(e.target.value))}
+            className="w-28 text-sm"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-fg-muted mb-1">No credit beyond ±…%</label>
+          <Input
+            type="number"
+            min="1"
+            max="100"
+            step="any"
+            value={form.sliderZeroRadius}
+            onChange={(e) => set('sliderZeroRadius', Number(e.target.value))}
+            className="w-28 text-sm"
+          />
+        </div>
+      </div>
+
+      {error && !rangeError && <p className="text-danger-fg text-xs">{error}</p>}
+      {free > 0 && (
+        <p className="text-warning-fg text-xs">
+          Players who don&apos;t move the slider get {Math.round(free * 100)}% of the points (the knob starts in
+          the middle).
+        </p>
+      )}
+      {form.sliderShowValue && !form.sliderUnit.trim() && (
+        <p className="text-warning-fg text-xs">Consider a unit so players know what they&apos;re guessing.</p>
+      )}
+      <p className="text-fg-muted text-xs">
+        Full points within the full-credit distance of the target, falling linearly to zero at the no-credit
+        distance. Distances are shares of the whole slider.
+        {form.grading === 'COMPLETENESS' &&
+          ' Completeness: any answer gets full points; the target is still shown at reveal.'}
+      </p>
+    </div>
+  );
+}
 
 /** Thumbnail + alt text (or the empty-alt warning) of an image in the form. */
 function ImagePreview({ imageId, alt, size }: { imageId: string; alt: string; size: 'sm' | 'md' }) {
@@ -678,6 +1036,10 @@ function QuestionForm({
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function setSliderRange(patch: Partial<FormState>) {
+    setForm((prev) => withSliderRange(prev, patch));
+  }
+
   return (
     <div className="space-y-4">
       {/* Type + grading */}
@@ -694,6 +1056,7 @@ function QuestionForm({
             <option value="fill_in_the_blank">Fill in the Blank</option>
             <option value="multi_select">Multi-Select (Select All That Apply)</option>
             <option value="map_pin">Map pin (tap on image)</option>
+            <option value="slider">Slider (closest guess)</option>
           </select>
         </div>
         <div className="flex-1">
@@ -861,6 +1224,8 @@ function QuestionForm({
         </div>
       )}
 
+      {form.type === 'slider' && <SliderFields form={form} set={set} setRange={setSliderRange} />}
+
       {form.type === 'map_pin' && (
         <MapPinFields form={form} set={set} listImages={listImages} uploadImage={uploadImage} />
       )}
@@ -878,7 +1243,7 @@ function QuestionForm({
             max="300"
           />
         </div>
-        {(form.grading === 'COMPLETENESS' || form.type === 'map_pin') && (
+        {(form.grading === 'COMPLETENESS' || form.type === 'map_pin' || form.type === 'slider') && (
           <div>
             <label className="block text-xs text-fg-muted mb-1">Points value</label>
             <Input
@@ -902,6 +1267,8 @@ function QuestionForm({
             const blocked =
               form.type === 'map_pin'
                 ? mapPinFormError(form)
+                : form.type === 'slider'
+                ? sliderFormError(form)
                 : form.type === 'multiple_choice'
                 ? optionImagesFormError(form.mcOptions)
                 : form.type === 'multi_select'
@@ -1070,6 +1437,7 @@ export default function QuestionEditorPage() {
     fill_in_the_blank: 'Fill',
     multi_select: 'Multi',
     map_pin: 'Map',
+    slider: 'Slider',
   };
 
   if (loading) return <div className="p-8 text-fg-muted">Loading\u2026</div>;
@@ -1216,6 +1584,12 @@ export default function QuestionEditorPage() {
                       {(q.answer_data['editDistance'] as number) > 0 && (
                         <span className="ml-2 text-fg-muted">(\u00b1{q.answer_data['editDistance'] as number} edit distance)</span>
                       )}
+                    </div>
+                  )}
+
+                  {q.type === 'slider' && (
+                    <div className="mt-2 text-xs text-fg-muted">
+                      {sliderSummary(q)}
                     </div>
                   )}
 

@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { AuthImage } from '../../components/AuthImage';
+import { targetLine } from '../../lib/slider';
 import type { AnswerReveal, HostQuestionSummaryItem } from '../../types/game';
 
 const TARGET_BUCKETS = 8;
@@ -86,6 +87,7 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
     fill_in_the_blank: 'Fill in the Blank',
     multi_select: 'Multi-Select',
     map_pin: 'Map Pin',
+    slider: 'Slider',
   };
 
   const answeredPct = totalPlayers > 0 ? Math.round((totalAnswered / totalPlayers) * 100) : 0;
@@ -191,6 +193,11 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
           );
         })}
 
+        {/* slider: the target line instead of a chart (its keys are bin numbers). */}
+        {type === 'slider' && reveal.type === 'slider' && (
+          <p className="text-fg text-lg">{targetLine(reveal)}</p>
+        )}
+
         {type === 'fill_in_the_blank' && (
           <div className="space-y-2">
             {reveal.type === 'fill_in_the_blank' && (
@@ -215,7 +222,7 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
 
       {/* Footer stats */}
       <div className="flex items-center gap-4 pt-1 border-t border-line text-lg">
-        {type === 'map_pin' ? (
+        {type === 'map_pin' || type === 'slider' ? (
           // Geometry-based, so the same for both grading types. No image here.
           <>
             <span className="text-success-fg font-semibold">

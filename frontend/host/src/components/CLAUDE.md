@@ -33,6 +33,12 @@ game state, or role/course logic here; the map canvas and `AuthImage` load image
   dot per distribution key `"bx,by"` at the cell centre `((bx + 0.5) / 50, (by + 0.5) / 50)`
   with radius ∝ √count (so area grows with count), then the target and both radius circles on
   top. Same view for both grading types. Dots are `mapColor('heat', 0.55)` (`lib/mapPin.ts`).
+- `SliderHistogram.tsx` (T7 slider) — `SliderScale` (the open question's scale) and
+  `SliderHistogram` (results): `B` bars in one coordinate system (bar b spans
+  `[b/B, (b+1)/B]`, index k sits at `k/N`), the full-credit band (`success-soft`) behind
+  the bars, the target line (`success`) at its exact position with "Answer: 58 hot dogs" or
+  "Target" above, counts on `bg-page` chips above the bars (so the marker never crosses
+  them), "No answers" when empty. Bin keys must match `slider_math.slider_bin`.
 - `AuthImage.tsx` (T8) — **byte-identical in all three apps**. Renders an uploaded image by
   ID through `lib/images.ts` (Bearer header, blob URL, shared cache, so a preloaded image
   renders at once), always `object-contain` (never crops). While loading: an empty

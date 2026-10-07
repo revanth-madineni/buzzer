@@ -24,6 +24,13 @@ in `pages/game/GameLayout.tsx`.
   change with the theme and the cache never goes stale. If a token is empty (`theme.css` not
   imported), it logs once, returns `'transparent'` and doesn't cache. `drawPin`'s colour
   defaults to `map-pin` inside the function.
+- `slider.ts` (T7 slider) — **byte-identical in all three apps**; the client mirror of
+  `backend/app/services/slider_math.py` (`sliderGeometry`, `snap` = floor(k + 0.5),
+  `inRange`, `onGrid`, `snapIndex`, `indexValue`, `pct`, `middleIndex`, `binCount` /
+  `binOf` / `binRange`, `sliderDistance` / `sliderFraction`, `formatValue` (en-US, exactly
+  `decimals`), `endLabels`, `positionText`, `targetLine`, `freePoints`). Defines its own
+  `SliderSettings` / `SliderRevealData` types, which `types/game.ts` extends. Type-checked
+  only; checked once against the Python in Node.
 - `theme.ts` (T9) — the light/dark theme store, **byte-identical in all three apps**, with no
   React context:
   - the storage key comes only from `<html data-theme-key>` (`buzzer:theme:player` here). If

@@ -64,7 +64,7 @@ own `course_id` (see `models/CLAUDE.md`). `RoomCreateRequest` still takes a `cou
 that the two must match (T4 spec §4.4) is enforced in `services/`, not here.
 
 ### Question structure rules (`QuestionCreate.validate_structure`)
-`type` ∈ `multiple_choice | true_false | fill_in_the_blank | multi_select | map_pin`;
+`type` ∈ `multiple_choice | true_false | fill_in_the_blank | multi_select | map_pin | slider`;
 `grading_type` ∈ `ACCURACY | COMPLETENESS`.
 
 | type | `config` | `answer_data` (ACCURACY only, except map_pin) |
@@ -73,10 +73,15 @@ that the two must match (T4 spec §4.4) is enforced in `services/`, not here.
 | true_false | not checked | `answer_points`: dict with exactly keys `"true"`, `"false"` |
 | fill_in_the_blank | not checked | `acceptedAnswers`: non-empty list of non-blank strings; `answerPoints`: list, len = acceptedAnswers, each ≥ 0; optional `editDistance`: int ≥ 0 |
 | multi_select | `options`: list, ≥2 | `answer_points`: list, len = options, numbers (**negatives allowed**) |
+| slider (T7) | `min`/`max`/`step` (valid numbers, \|min\|,\|max\| ≤ 1e9, `max > min`, `step > 0`, min and step ≤ 6 decimals, range a whole number of steps, 1–10000), optional `showValue` (bool, default true), `unit` (1–20 chars), `minLabel`+`maxLabel` (both or neither, 1–40 chars; required when `showValue` is false), `promptImageId`. Unknown keys rejected. | **both grading types**: exactly `target` (in range and on a step, judged in index units with `EPS` 1e-6), `fullRadius` (0.01 ≤ r < 1), `zeroRadius` (> fullRadius, ≤ 1). Radii are fractions of the range. `_validate_slider` uses `services/slider_math`. |
 | map_pin (T7) | exactly `imageId` (non-empty string ≤ 64; not required to be a UUID, so hand-made bundles can use `"map1"`) + optional `imageWidth`/`imageHeight` (positive ints, overwritten by the server) | **both grading types**: exactly `targets` (list of exactly 1 `{x, y}`, valid numbers in [0, 1]), `fullRadius` (≥ 0.02), `zeroRadius` (> fullRadius, ≤ 2). Radii are in image-width units. Unknown keys rejected everywhere. |
 
-Other `COMPLETENESS` questions have no `answer_data` requirements. map_pin needs the target
-under COMPLETENESS too, because both grading types show the same map reveal.
+Other `COMPLETENESS` questions have no `answer_data` requirements. map_pin and slider need the
+target under COMPLETENESS too, because both grading types show the same reveal.
+
+**Import direction (slider):** `admin.py` imports `services/slider_math.py` (pure, imports
+nothing from the app). That's the one place `schemas/` imports from `services/`; it can't be
+`game_service`, which imports `schemas.admin` (cycle).
 
 **Image keys (T8, `_validate_question_images`):**
 - `promptImageId` — optional on **every** type (map_pin's allowed key set includes it); a

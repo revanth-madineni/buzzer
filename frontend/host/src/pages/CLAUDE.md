@@ -46,6 +46,7 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
     truth, 0.02–2) paired with 0.02–0.5 sliders, a warning below 0.04, and saving blocked
     without an image and target for both grading types. Map pin questions take an entered
     points value. "Replace image" uploads a new one; the target fractions are kept.
+    Slider (T7): the same slider form as the admin copy (`frontend/admin/src/pages/CLAUDE.md`).
     Images (T8) work as in the admin copy (`frontend/admin/src/pages/CLAUDE.md`): a prompt
     image on every type, text-or-image options on multiple_choice / multi_select
     (`config.optionImageIds` parallel to `options`, `""` text for image options), the
@@ -98,6 +99,11 @@ are wrapped in `RequireAuth`, which only checks that `localStorage.token` exists
   option (T8) is labelled with its letter plus an `h-16` thumbnail instead of text.
   "Next Question" / "Show Final Results" (`host_advance`). With auto-advance on, a 10 s
   countdown then advances.
+- **slider (T7)**: `QuestionPage` shows `SliderScale` (end labels on a plain track, "steps
+  of 0.5" when the step isn't 1) under the prompt, hidden while locked. `ResultsPage` uses
+  `SliderHistogram` for both grading types (+ the Participation caption). `GameOverPage`
+  shows `targetLine(reveal)` instead of a distribution chart (its keys are bin numbers),
+  plus `withinFullPct` / `averageCredit` like map_pin.
 - `game/GameOverPage.tsx` — anonymous score histogram (~8 buckets up to `maxPossibleScore`),
   average/high/player count, "New Game" (→ `/home`), and a per-question breakdown card
   (distribution, accepted answers, correct %, response rate, average answer time; for map_pin,
@@ -172,6 +178,8 @@ Two separate role systems apply (see `backend/app/models/CLAUDE.md`): the **glob
 | `error` / `connect_error` | full-screen error view |
 
 ## Gotchas
+- **Every phase navigation reconnects the socket** (`GameLayout` effect deps `[code,
+  navigate]`); see `frontend/player/src/pages/CLAUDE.md`.
 - **No client-side role gate.** A GUEST token (e.g. left over from the player app, which shares
   `localStorage.token`; see `lib/CLAUDE.md`) gets into `/home`. All three list calls then 403,
   and the page shows the generic "Failed to load courses or games. Are you still logged in?"

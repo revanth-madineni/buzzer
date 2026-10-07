@@ -73,6 +73,16 @@ Images, Sessions, Guests), plus Logout. Unknown paths → `/users`.
     warns. `config = {imageId}` (the server fills in dimensions); `answer_data = {targets:
     [{x, y}], fullRadius, zeroRadius}`. List line: "Map pin — target (0.42, 0.37), r 0.04 →
     0.15". "Replace image" uploads a new image and keeps the target fractions.
+  - Slider (T7, "Slider (closest guess)", spec `docs/plans/t7-slider.md` §4.11; the host
+    copy is identical): Numeric / Spectrum presets, min/max/step, unit, end labels, "Show
+    numbers to players", a target picked on a plain range input (indices, so always on the
+    grid) or typed, and radii **entered as percentages** (`FormState` holds 5 / 30, the
+    payload 0.05 / 0.3). A range change re-snaps the target on **blur** and on presets, not
+    per keystroke (typing "100" into max would pass through 1). `sliderFormError` mirrors
+    every server rule and blocks saving; warnings: the share of points a player gets for not
+    moving the knob (`freePoints`), and "Consider a unit". Points value is entered, like
+    map pin. List line: "Slider — 0–100 hot dogs, target 58, ±5% → 30%" or "Slider — Ice cold
+    ↔ Lava, target 35%".
   - Images (T8, spec `docs/plans/t8-images.md` §4.13): every type gets an optional **prompt
     image** (`PromptImageField`, saved as `config.promptImageId`; shown on the projector only).
     `multiple_choice` / `multi_select` options can each be text **or** an image (`OptionList`,

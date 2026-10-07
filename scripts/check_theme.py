@@ -183,6 +183,7 @@ IDENTICAL_GROUPS = (
     (APPS, "src/lib/theme.ts"),
     (APPS, "src/components/ThemeToggle.tsx"),
     (APPS, "src/lib/mapPin.ts"),
+    (APPS, "src/lib/slider.ts"),
     (APPS, "src/components/MapCanvas.tsx"),
     (APPS, "src/lib/images.ts"),
     (APPS, "src/components/AuthImage.tsx"),

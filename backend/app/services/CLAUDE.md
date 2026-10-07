@@ -58,6 +58,14 @@ transaction, with the exceptions noted below.
       types;
     - `map_pin_stats(config, answer_data, answers)` → `withinFullPct` / `averageCredit` from
       geometry, `None` when no answer has a valid `{x, y}`;
+  - **Slider (T7, spec `docs/plans/t7-slider.md`).** Pieces that need the question row or
+    `map_pin_fraction` (which slider reuses as-is):
+    - `slider_answer_index(config, answer)` → snapped index only for exactly `{"value": n}`
+      in range;
+    - `slider_reveal(grading_type, config, answer_data)` — the same reveal for both grading
+      types, every key always present, `target` canonical;
+    - `slider_stats(...)` → `withinFullPct` / `averageCredit` like `map_pin_stats`;
+    - `slider_dist_key(config, answer)` → histogram bin key; `_score_slider`.
   - **Image references (T8).** `question_image_ids(type, config)` → every `(image_id, role)`
     (`map` = map_pin `imageId`, `prompt` = `promptImageId`, `option` = non-null
     `optionImageIds`), in that order; malformed values ignored. **The one place** that knows
@@ -68,7 +76,15 @@ transaction, with the exceptions noted below.
   - Summaries: `get_leaderboard` (MySQL sum per user_id), `get_player_question_summary`,
     `get_host_question_summary` (both include an `answerReveal` per question, and `imageAlt`
     for questions with images (T8); the host one adds `withinFullPct` / `averageCredit` for
-    map_pin).
+    map_pin and slider).
+- `slider_math.py` (T7) — **all slider geometry**, pure and import-free so `schemas/admin.py`
+  can validate with it: `slider_geometry(config)` → `(min, max, step, N, D)` or None,
+  `slider_index` (the one "in range" test: `k` within `[−EPS, N + EPS]`, snapped with
+  `snap(k) = floor(k + 0.5)` — ties **up**, never Python's `round`), `slider_on_grid`,
+  `slider_value` (canonical value, `int` when `D = 0`), `slider_bins` / `slider_bin`
+  (`min(N + 1, 20)` bins, key `(k × B) // (N + 1)`), `slider_distance`, `slider_pct`, and
+  `slider_target_line(reveal)` (the report's and host game-over's "Target: …" text).
+  `frontend/*/src/lib/slider.ts` mirrors it formula for formula.
 - `state_service.py` — Redis live state. Keys: `room:{code}` (JSON, 90-min TTL),
   `session:{id}:players` (set), `session:{id}:player:{uid}` (JSON incl. score, `is_connected`),
   `session:{id}:question` (current question + `started_at`), `session:{id}:answered:{qid}`
@@ -145,7 +161,9 @@ transaction, with the exceptions noted below.
   aggregate stats only (per-question distribution bar chart / word cloud, % correct, score
   histogram). No player names. Every image it **draws** (map, prompt, MC option; T7/T8) is
   embedded **once** as a data URI in a hidden SVG's `<defs>` (`id="img-{id}"`) and drawn by
-  `<use>` with the alt text as `<title>`. map_pin: inline SVG + heatmap dots from
+  `<use>` with the alt text as `<title>`. slider: horizontal bars over the bins (value
+  ranges, or just the end labels for a spectrum), the target's bin highlighted, then
+  `slider_target_line`. map_pin: inline SVG + heatmap dots from
   `map_pin_bucket` + both circles + target, within-target % and average credit. Prompt
   images under the prompt; MC image options as bar-label thumbnails. Multi-select still
   isn't rendered (and its option images aren't embedded).
@@ -204,7 +222,11 @@ Empty answer → 0. `COMPLETENESS` → full `points_value` for any answer. `ACCU
   `round(points_value × map_pin_fraction(d), 2)`; correct iff `d ≤ fullRadius`. A malformed
   question or answer scores 0 and logs `map_pin_bad_question` / `map_pin_bad_answer` instead
   of raising. Under COMPLETENESS the usual early return gives full points for any valid tap.
-Player answer keys: `selectedIndex`, `selectedValue`, `text`, `selectedIndices`, `x`/`y`.
+- `slider` (T7): `d = |k − kt| / N` in step indices; points =
+  `round(points_value × map_pin_fraction(d), 2)`; correct iff `d ≤ fullRadius`. Bad data
+  scores 0 and logs `slider_bad_question` / `slider_bad_answer`. `{value: 0}` is not empty.
+Player answer keys: `selectedIndex`, `selectedValue`, `text`, `selectedIndices`, `x`/`y`,
+`value`.
 There is no speed bonus; scores are float sums.
 
 ## Gotchas
@@ -259,6 +281,7 @@ There is no speed bonus; scores are float sums.
   `_answer_reveal`. `report_service` lacks `multi_select` entirely (no badge, chart, or reveal).
   map_pin avoids the drift: all four call `map_pin_reveal`, and each checks map_pin
   **before** the `COMPLETENESS` early return (so COMPLETENESS map-pin still gets the map).
+  Slider does the same with `slider_reveal`.
 - Distribution normalization differs: live Redis dist (`record_answer`) collapses internal
   whitespace for fill-in answers, while the host summary and report only `strip()`. map_pin
   uses `map_pin_bucket` in all three, so its counts agree.

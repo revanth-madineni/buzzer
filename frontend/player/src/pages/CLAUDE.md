@@ -37,6 +37,15 @@ Routes are defined in `../App.tsx` (basename `/player/` in production):
   `aria-label` ("Option B: <alt>", or "Option B, image" without alt text, from `imageAlt`), so
   the inner `<img>` has `alt=""`; multi-select cells also set `aria-pressed`. Without image
   options the original full-width list is unchanged. Prompt images are never shown here.
+- **slider (T7)** in `QuestionPage`: a `SliderQuestion` sub-component keyed by
+  `questionId`. The knob starts at `middleIndex`; −/+ move one step; **Confirm** sends
+  `{value: indexValue(geom, k)}` (no "moved" requirement, no auto-submit). A malformed
+  config shows "This question can't be answered." `ResultsPage`: `SliderInput` in reveal
+  mode with "Spot on" / "Close — partial credit" / "Way off" / "No answer" from geometry
+  (+ "· full credit for answering" under COMPLETENESS); the own value comes from
+  `lastAnswerData`, else `sessionStorage['buzzer:slider:{code}:{qid}']` (a JSON number,
+  written on `answer_received`). `GameOverPage`: "You: 42 hot dogs · Answer: 58 hot dogs"
+  with numbers shown, else points earned / possible.
 - `game/FeedbackPage.tsx` — static "Answer locked in!" while waiting for the reveal.
 - `game/ResultsPage.tsx` — this question's outcome, your answer, points, total, and rank.
   map_pin: `MapPinCanvas` in reveal mode for both grading types, with a label computed from
@@ -92,11 +101,16 @@ machine are defined server-side in `backend/app/websocket/CLAUDE.md`.
 
 Answer payloads sent: MC `{selectedIndex: number}`, T/F `{selectedValue: boolean}`, fill-in
 `{text}` (trimmed), multi-select `{selectedIndices: number[]}`, map pin `{x, y}` (clamped to
-[0, 1]). These match what
+[0, 1]), slider `{value}` (the canonical value of a step). These match what
 `services/game_service.calculate_score` expects, so the backend's type-confusion gotchas
 (string `"false"`, non-int index) aren't triggered by this client.
 
 ## Gotchas
+- **Every phase navigation reconnects the socket.** `GameLayout`'s socket effect depends on
+  `[code, navigate]`, and React Router v6's `navigate` changes identity on each route
+  change, so the socket is torn down and rejoined on every `navigate`. An event that lands in
+  that gap is lost (seen in a headless run: a player missed its `question_results` and sat
+  on the feedback page). The host `GameLayout` has the same shape.
 - **Late answers are non-fatal; other errors still end the game view.** Since T7 the three
   timing rejections (by `error.code`) only show a banner and mark the answer as not recorded.
   Any other server `error` still replaces the whole UI with the message and a "Back to Join"
